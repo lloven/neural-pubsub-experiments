@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires Docker Compose stack (deselect with '-m not integration')",
+]

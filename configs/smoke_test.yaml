@@ -1,0 +1,42 @@
+# Smoke test configuration for Level 4 dry runs.
+# Uses shortened durations and limited pipeline counts
+# to validate end-to-end flow before real experiments.
+
+arrival_rate: 2.0         # Slow rate for smoke testing
+duration_s: 30            # 30-second run (vs 60s default)
+max_pipelines: 50         # Stop after 50 pipelines (vs unlimited)
+pipeline_mix:
+  cqi_prediction: 0.4
+  anomaly_detection: 0.3
+  sensor_fusion: 0.3
+seed: 42
+
+# Phase-specific overrides
+phases:
+  phase_a:
+    warmup_s: 5           # 5s warmup (vs 600s)
+    measurement_s: 25     # 25s measurement (vs 1800s)
+    seeds: [42]           # Single seed for smoke
+    rates: [medium]       # Single rate
+    complexities: [3]     # Single complexity
+    configs: [A4]         # Neural only (skip baselines for smoke)
+
+  phase_b:
+    warmup_s: 5
+    measurement_s: 25
+    seeds: [42]
+    configs: [B2, B3]     # Slice-aware + governance
+
+  phase_c:
+    warmup_s: 5
+    measurement_s: 25
+    seeds: [42]
+    configs: [C2]         # Federated only
+
+  phase_d:
+    warmup_s: 5
+    measurement_s: 25
+    seeds: [42]
+    failure_delay_s: 10   # Inject failure at t=10s
+    failure_duration_s: 10 # Failure lasts 10s
+    configs: [D1, D2]     # Worker kill + broker kill

@@ -1,0 +1,157 @@
+services:
+
+  broker-d1:
+    build: .
+    command: >
+      -m src.broker.neural_broker
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers http://broker-d2:8080
+    networks:
+      - slice-URLLC-d1
+      - slice-eMBB-d1
+      - federation
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./results:/app/results
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  broker-d2:
+    build: .
+    command: >
+      -m src.broker.neural_broker
+      --domain d2
+      --broker-id broker-d2
+      --port 8080
+      --peers http://broker-d1:8080
+    networks:
+      - slice-eMBB-d2
+      - federation
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # Domain 1: 2 URLLC workers (CQI pipeline) + 1 eMBB worker (anomaly detection)
+  worker-d1-urllc-1:
+    build: .
+    command: >
+      -m src.worker
+      --node-id d1-urllc-1
+      --slice URLLC
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-URLLC-d1
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-d1-urllc-2:
+    build: .
+    command: >
+      -m src.worker
+      --node-id d1-urllc-2
+      --slice URLLC
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-URLLC-d1
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-d1-embb-1:
+    build: .
+    command: >
+      -m src.worker
+      --node-id d1-embb-1
+      --slice eMBB
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 2.0
+    networks:
+      - slice-eMBB-d1
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Domain 2: eMBB only (no URLLC) — CQI pipelines must be forwarded to D1
+  worker-d2-embb-1:
+    build: .
+    command: >
+      -m src.worker
+      --node-id d2-embb-1
+      --slice eMBB
+      --domain d2
+      --broker-url http://broker-d2:8080
+      --capacity 2.0
+    networks:
+      - slice-eMBB-d2
+    depends_on:
+      broker-d2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-d2-embb-2:
+    build: .
+    command: >
+      -m src.worker
+      --node-id d2-embb-2
+      --slice eMBB
+      --domain d2
+      --broker-url http://broker-d2:8080
+      --capacity 1.0
+    networks:
+      - slice-eMBB-d2
+    depends_on:
+      broker-d2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  workload:
+    build: .
+    command: >
+      -m src.workload
+      --broker-url http://broker-d1:8080
+      --arrival-rate ${ARRIVAL_RATE:-5.0}
+      --duration ${DURATION_S:-60}
+      --seed ${SEED:-42}
+      --result-file /app/results/metrics.csv
+    volumes:
+      - ./results:/app/results
+    networks:
+      - federation
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+      broker-d2:
+        condition: service_healthy
+
+networks:
+  slice-URLLC-d1:
+    internal: true
+  slice-eMBB-d1:
+    internal: true
+  slice-eMBB-d2:
+    internal: true
+  federation:
+    internal: false

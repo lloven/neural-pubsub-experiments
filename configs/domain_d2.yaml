@@ -1,0 +1,13 @@
+domain_id: d2
+broker_id: broker-d2
+port: 8080
+alpha: 1.0
+beta: 1.0
+gamma: 1.0
+peer_urls:
+  - http://broker-d1:8080
+summary_interval_s: 10.0
+local_stage_types:
+  - collect  # raw radio data stays local
+trust_levels:
+  d1: 0.8  # trust level with domain d1

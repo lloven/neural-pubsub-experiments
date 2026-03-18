@@ -1,0 +1,5 @@
+# Development and testing dependencies (not in Docker image)
+-r requirements.txt
+docker>=6.0
+pytest>=7.0
+pytest-asyncio>=0.21

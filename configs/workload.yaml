@@ -1,0 +1,7 @@
+arrival_rate: 5.0   # events per second
+duration_s: 60      # 1 minute run
+pipeline_mix:
+  cqi_prediction: 0.5
+  anomaly_detection: 0.3
+  sensor_fusion: 0.2
+seed: 42
