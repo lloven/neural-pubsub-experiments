@@ -1,7 +1,26 @@
-arrival_rate: 5.0   # events per second
-duration_s: 60      # 1 minute run
+# Workload generator configuration.
+# Controls the Poisson-arrival pipeline submission process.
+
+# Mean arrival rate (pipelines per second). The generator draws inter-arrival
+# times from an exponential distribution with this mean rate.
+arrival_rate: 5.0
+
+# Total duration of the workload run in seconds.
+# The generator stops submitting new pipelines after this time elapses.
+duration_s: 60
+
+# Pipeline type mix: probability distribution over the three pipeline templates.
+# Values must sum to 1.0. Each incoming pipeline is randomly assigned a type
+# according to these weights.
+# Valid keys:
+#   cqi_prediction    - CQI (Channel Quality Indicator) prediction; requires URLLC slice
+#   anomaly_detection - RAN anomaly detection; requires eMBB slice
+#   sensor_fusion     - Multi-sensor fusion; can use any slice
 pipeline_mix:
   cqi_prediction: 0.5
   anomaly_detection: 0.3
   sensor_fusion: 0.2
+
+# Random seed for reproducible workload sequences.
+# Controls both Poisson arrivals and pipeline type sampling.
 seed: 42

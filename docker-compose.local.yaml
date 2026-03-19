@@ -1,3 +1,32 @@
+# =============================================================================
+# Local emulation of the multi-domain, multi-slice Neural Pub/Sub testbed.
+#
+# Topology:
+#   2 domains (d1 = Tokyo, d2 = Oulu), each with its own broker and workers.
+#   Domain 1: 2 URLLC workers + 1 eMBB worker  (handles CQI + anomaly pipelines)
+#   Domain 2: 2 eMBB workers only               (CQI pipelines forwarded to D1)
+#
+# Network slices (Docker internal networks):
+#   slice-URLLC-d1  -- Near-RT RIC slice, domain 1 (broker-d1 + URLLC workers)
+#   slice-eMBB-d1   -- Edge/eMBB slice, domain 1   (broker-d1 + eMBB workers)
+#   slice-eMBB-d2   -- Edge/eMBB slice, domain 2   (broker-d2 + eMBB workers)
+#   federation      -- Cross-domain overlay (brokers + workload generator)
+#
+# The workload generator connects to broker-d1 via the federation network and
+# submits pipelines at a configurable Poisson arrival rate. Broker-d1 places
+# stages locally or forwards cross-domain to broker-d2 via federation.
+# Brokers exchange subscription summaries over the federation network.
+#
+# Environment variables (with defaults):
+#   ARRIVAL_RATE (5.0)  -- workload arrival rate (pipelines/s)
+#   DURATION_S   (60)   -- workload duration (seconds)
+#   SEED         (42)   -- random seed for reproducibility
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml up --build
+#   docker compose -f docker-compose.local.yaml down -v
+# =============================================================================
+
 services:
 
   broker-d1:

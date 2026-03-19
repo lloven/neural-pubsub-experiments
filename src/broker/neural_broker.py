@@ -545,10 +545,21 @@ class NeuralBroker:
                 except Exception:
                     return nid, False
 
-            # Probe all workers concurrently
+            # --- Concurrent health probes ---
+            # All registered workers are probed in parallel via
+            # asyncio.gather.  This keeps the total probe time bounded by
+            # the slowest single response (plus the 2 s timeout) rather
+            # than growing linearly with the number of workers.
             results = await asyncio.gather(
                 *(_probe(nid, w) for nid, w in workers_snapshot.items())
             )
+
+            # --- Consecutive-failure tracking ---
+            # A successful probe resets the failure counter to zero.  Each
+            # failed probe increments the counter.  Once a worker reaches
+            # `max_failures` consecutive failures it is declared dead.
+            # Using a consecutive (not cumulative) counter avoids false
+            # positives from transient network blips.
             for node_id, healthy in results:
                 if healthy:
                     self._worker_failures.pop(node_id, None)
@@ -564,7 +575,8 @@ class NeuralBroker:
                     if count >= max_failures:
                         dead_workers.append(node_id)
 
-            # Remove dead workers and trigger re-placement
+            # Remove dead workers and trigger re-placement for any
+            # in-flight pipelines that had stages on those workers.
             for node_id in dead_workers:
                 await self._remove_dead_worker(node_id)
 
@@ -581,16 +593,19 @@ class NeuralBroker:
         )
         self._worker_failures.pop(node_id, None)
 
-        # Record failure event for adaptation tracking
+        # Record a failure event so the AdaptationTracker can later compute
+        # the time delta between failure detection and successful recovery.
         self._adaptation_tracker.record_failure("worker_health", node_id, time.time())
 
-        # Remove from registry
+        # Remove the dead worker from the registry and rebuild the
+        # NetworkTopology so subsequent placement calls exclude it.
         async with self._workers_lock:
             removed = self._workers.pop(node_id, None)
             if removed is not None:
                 self._rebuild_topology()
 
-        # Find and re-place affected pipelines
+        # Scan active pipelines for stages assigned to the dead worker and
+        # attempt to re-place them onto surviving workers.
         await self._replace_failed_stages(node_id)
 
     async def _replace_failed_stages(self, dead_node_id: str) -> None:
@@ -615,7 +630,9 @@ class NeuralBroker:
             ]
 
         for ps in affected:
-            # Identify stages on the dead worker that haven't completed
+            # Identify stages on the dead worker that have not yet completed.
+            # Already-completed stages do not need re-placement because their
+            # results have already been collected.
             dead_stages = [
                 sid
                 for sid, nid in ps.placement.items()
@@ -624,15 +641,15 @@ class NeuralBroker:
             if not dead_stages:
                 continue
 
-            # Try re-placement for just the dead stages.
-            # NOTE: find_placement receives the full DAG rather than only the
-            # incomplete stages.  This is intentional for correctness: the
-            # placement solver needs the complete DAG topology (edges,
-            # latency-bound constraints, sovereignty labels) to produce a
-            # feasible assignment.  Only the *result* is scoped to dead_stages
-            # below.  Passing a partial DAG would require a sub-graph
-            # extraction that preserves constraint context, which is future
-            # optimisation work.
+            # --- Re-placement strategy ---
+            # Invoke the full DAG placement solver (find_placement) on the
+            # *complete* DAG, not just the failed stages.  This is necessary
+            # because the solver requires the full graph topology (edges,
+            # latency bounds, sovereignty labels) to produce a feasible
+            # assignment.  Only the assignments for `dead_stages` are
+            # extracted from the result; all other stages keep their current
+            # placement.  Passing a partial sub-graph would require
+            # constraint-preserving extraction (future work).
             replaced = False
             async with self._workers_lock:
                 if self._topology.nodes:
@@ -645,7 +662,7 @@ class NeuralBroker:
                             beta=self.config.beta,
                             gamma=self.config.gamma,
                         )
-                        # Update only the dead stages in the pipeline's placement
+                        # Cherry-pick only the dead stages from the new solution.
                         for sid in dead_stages:
                             ps.placement[sid] = new_placement[sid]
                         replaced = True
@@ -663,12 +680,19 @@ class NeuralBroker:
                     ps.pipeline_id,
                     dead_node_id,
                 )
+                # Record recovery so the AdaptationTracker can compute the
+                # failure-to-recovery time delta.
                 self._adaptation_tracker.record_recovery(
                     "worker_health", dead_node_id, time.time()
                 )
-                # Dispatch the re-placed stages that are ready
+                # Dispatch the re-placed stages whose predecessors are done.
                 await self._dispatch_ready_stages(ps)
             else:
+                # --- Pipeline failure path ---
+                # When re-placement fails (e.g., no surviving node satisfies
+                # the constraint set), the pipeline is marked as permanently
+                # failed and removed from the active set.  The metrics
+                # collector records a failed completion for aggregate stats.
                 async with self._pipelines_lock:
                     ps.failed = True
                     ps.error = (
@@ -819,6 +843,11 @@ class NeuralBroker:
                 node_id,
             )
         except Exception as exc:
+            # --- Dispatch failure: single-stage retry path ---
+            # When a POST /execute fails (network error, worker crash, etc.),
+            # the broker treats the worker as unreachable: it removes the
+            # worker from the registry, rebuilds the topology, and attempts
+            # a single re-placement + re-dispatch cycle for this stage.
             logger.warning(
                 "Dispatch of stage '%s' to worker '%s' failed: %s. "
                 "Attempting re-placement.",
@@ -826,7 +855,8 @@ class NeuralBroker:
                 node_id,
                 exc,
             )
-            # Remove the unreachable worker and attempt re-placement
+            # Evict the unreachable worker so that the re-placement solver
+            # does not assign the stage back to the same (dead) node.
             async with self._workers_lock:
                 if node_id in self._workers:
                     del self._workers[node_id]
@@ -837,10 +867,9 @@ class NeuralBroker:
                 "dispatch_fail", node_id, time.time()
             )
 
-            # Try to re-place just this stage.
-            # NOTE: find_placement receives the full DAG (see comment in
-            # _replace_failed_stages for rationale).  Only the single failed
-            # stage's assignment is extracted from the result.
+            # Re-place using the full DAG (see _replace_failed_stages for
+            # the rationale).  Only this single stage's assignment is
+            # extracted from the new solution.
             re_placed = False
             async with self._workers_lock:
                 if self._topology.nodes:
@@ -860,6 +889,9 @@ class NeuralBroker:
                         pass
 
             if re_placed:
+                # Attempt a single re-dispatch to the replacement worker.
+                # If this also fails, the pipeline is marked as failed below
+                # (no further retry attempts).
                 new_node_id = pipeline_state.placement[stage_id]
                 new_worker = self._workers.get(new_node_id)
                 if new_worker is not None:
@@ -869,7 +901,6 @@ class NeuralBroker:
                     self._adaptation_tracker.record_recovery(
                         "dispatch_fail", node_id, time.time()
                     )
-                    # Dispatch to the new worker
                     new_url = f"{new_worker.url.rstrip('/')}/execute"
                     try:
                         resp = await http_client.post(
@@ -885,7 +916,8 @@ class NeuralBroker:
                             exc2,
                         )
 
-            # All recovery attempts exhausted: mark pipeline as failed
+            # All recovery attempts exhausted: mark pipeline as permanently
+            # failed and remove it from the active set.
             async with self._pipelines_lock:
                 pipeline_state.failed = True
                 pipeline_state.error = (

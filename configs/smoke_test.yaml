@@ -1,42 +1,57 @@
 # Smoke test configuration for Level 4 dry runs.
-# Uses shortened durations and limited pipeline counts
-# to validate end-to-end flow before real experiments.
+# Uses shortened durations and limited pipeline counts to validate the
+# end-to-end flow before committing to real experiment runs.
+# This is NOT a production config; it exercises all code paths quickly.
 
-arrival_rate: 2.0         # Slow rate for smoke testing
-duration_s: 30            # 30-second run (vs 60s default)
-max_pipelines: 50         # Stop after 50 pipelines (vs unlimited)
+# Arrival rate, deliberately low to keep smoke tests fast.
+arrival_rate: 2.0
+
+# Total run duration (seconds). Short compared to the production 60s default.
+duration_s: 30
+
+# Hard cap on pipelines submitted. The generator stops after this many
+# regardless of remaining duration. Prevents runaway smoke tests.
+max_pipelines: 50
+
+# Pipeline type mix (same keys as workload.yaml).
 pipeline_mix:
   cqi_prediction: 0.4
   anomaly_detection: 0.3
   sensor_fusion: 0.3
+
+# Random seed for reproducibility.
 seed: 42
 
-# Phase-specific overrides
+# --- Phase-specific overrides ---
+# Each phase section overrides the global settings above for that phase's
+# smoke run. Production experiments use much longer durations and multiple
+# seeds/rates/complexities; these smoke values are minimal subsets.
 phases:
+
   phase_a:
-    warmup_s: 5           # 5s warmup (vs 600s)
-    measurement_s: 25     # 25s measurement (vs 1800s)
-    seeds: [42]           # Single seed for smoke
-    rates: [medium]       # Single rate
-    complexities: [3]     # Single complexity
-    configs: [A4]         # Neural only (skip baselines for smoke)
+    warmup_s: 5           # Warm-up before measurement (production: 600s)
+    measurement_s: 25     # Measurement window (production: 1800s)
+    seeds: [42]           # Single seed (production: 5 seeds per config)
+    rates: [medium]       # Single rate (production: low/medium/high)
+    complexities: [3]     # Single pipeline complexity, i.e., stage count (production: 2/3/5)
+    configs: [A4]         # Neural only; skip Kafka/static/random baselines for smoke
 
   phase_b:
     warmup_s: 5
     measurement_s: 25
     seeds: [42]
-    configs: [B2, B3]     # Slice-aware + governance
+    configs: [B2, B3]     # Slice-aware + governance (skip B1 baseline and B4 failure)
 
   phase_c:
     warmup_s: 5
     measurement_s: 25
     seeds: [42]
-    configs: [C2]         # Federated only
+    configs: [C2]         # Federated only (skip Kafka baseline and failure configs)
 
   phase_d:
     warmup_s: 5
     measurement_s: 25
     seeds: [42]
-    failure_delay_s: 10   # Inject failure at t=10s
-    failure_duration_s: 10 # Failure lasts 10s
-    configs: [D1, D2]     # Worker kill + broker kill
+    failure_delay_s: 10   # Seconds into run before injecting failure
+    failure_duration_s: 10 # How long the failure lasts before recovery
+    configs: [D1, D2]     # Worker kill + broker kill (skip partition and funnel)

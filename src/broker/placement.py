@@ -305,6 +305,11 @@ def _placement_cost(
     Returns:
         Scalar cost value (lower is better).
     """
+    # --- Term 1: L_total (latency) and Term 3: D_cross (governance penalty) ---
+    # Both are accumulated in a single pass over DAG edges.  For each edge
+    # (u, v), look up the network latency between the nodes assigned to u
+    # and v and add it to L_total.  If those nodes belong to different
+    # sovereignty domains, increment the domain-crossing counter D_cross.
     l_total = 0.0
     d_cross = 0
 
@@ -315,12 +320,17 @@ def _placement_cost(
         if topology.get_node(src_node).domain_id != topology.get_node(tgt_node).domain_id:
             d_cross += 1
 
+    # --- Term 2: U_total (load imbalance) ---
+    # For each stage, compute its load ratio rho_v / C_node.  Summing these
+    # ratios penalises placements that concentrate demand on low-capacity
+    # nodes, encouraging the solver to spread load across the infrastructure.
     u_total = 0.0
     for stage_id, node_id in placement.items():
         stage = dag.get_stage(stage_id)
         node = topology.get_node(node_id)
         u_total += stage.computational_demand / max(node.capacity, 1e-12)
 
+    # Weighted sum per Eq. 10: alpha * latency + beta * load + gamma * governance
     return alpha * l_total + beta * u_total + gamma * d_cross
 
 
@@ -441,7 +451,13 @@ def _greedy_placement(
         RuntimeError: If no feasible node exists for some stage.
     """
     placement: dict[str, str] = {}
+    # Track load committed to each node during this placement round so that
+    # subsequent feasibility checks account for stages already assigned.
     additional_load: dict[str, float] = {}
+
+    # Sort stages topologically so that every stage is placed after all its
+    # predecessors.  This guarantees that predecessor costs (latency, domain
+    # crossings) are known when evaluating candidates for the current stage.
     order = dag.topological_sort()
 
     for stage_id in order:
@@ -449,13 +465,18 @@ def _greedy_placement(
         best_node: Optional[str] = None
         best_cost = math.inf
 
+        # Evaluate every node as a candidate for this stage.  The
+        # feasibility filter (_is_node_feasible) checks capacity, slice,
+        # governance, and latency constraints against the partial placement.
         for node in topology.nodes:
             if not _is_node_feasible(
                 stage, node, dag, topology, governance, placement, additional_load
             ):
                 continue
 
-            # Incremental cost for placing this stage on this node
+            # Compute the incremental Eq. 10 cost contributed by placing
+            # this single stage on `node`.  Only edges to already-placed
+            # predecessors are counted (successors are not yet placed).
             latency_inc = 0.0
             domain_inc = 0
 
@@ -480,6 +501,7 @@ def _greedy_placement(
                 f"Check capacity, slice, governance, and latency constraints."
             )
 
+        # Commit this assignment and book the load so later stages see it.
         placement[stage_id] = best_node
         additional_load[best_node] = (
             additional_load.get(best_node, 0.0) + stage.computational_demand
@@ -541,14 +563,22 @@ def _dp_placement(
     n_nodes = len(node_ids)
     INF = float("inf")
 
-    # dp[stage_id][node_idx] = minimum cost of subtree rooted at stage
+    # --- DP tables ---
+    # dp[stage_id][node_idx] holds the minimum cost of placing the entire
+    # sub-tree rooted at `stage_id` when `stage_id` itself is assigned to
+    # the node at index `node_idx`.  "Sub-tree" here means the stage and
+    # all its transitive predecessors (the DAG must be a tree).
+    # Ref: Eq. 10 decomposition for tree DAGs (paper Section 4.3).
     dp: dict[str, list[float]] = {}
-    # choice[stage_id][node_idx] = dict mapping child_stage_id -> node_idx
+    # choice[stage_id][node_idx] records, for each predecessor of
+    # `stage_id`, which node index was optimal.  Used for backtracking.
     choice: dict[str, list[dict[str, int]]] = {}
 
-    # Process in topological order (sources first). For each stage, its
-    # predecessors (children in the tree DP sense) have already been processed.
-    # Edges point source -> sink; the DP tree is rooted at the sink.
+    # --- Topological traversal (sources first) ---
+    # The topological order guarantees that when we process stage v, the DP
+    # rows for all its predecessors (children in the DP-tree sense) are
+    # already filled.  DAG edges point source -> sink, so the DP tree is
+    # conceptually rooted at the pipeline sink.
     topo = dag.topological_sort()
 
     for stage_id in topo:
@@ -557,21 +587,34 @@ def _dp_placement(
         choice[stage_id] = [{} for _ in range(n_nodes)]
         predecessors = dag.predecessors(stage_id)
 
+        # Try assigning this stage to each candidate node.
         for ni, nid in enumerate(node_ids):
             node = topology.get_node(nid)
 
-            # Basic feasibility for this stage on this node
+            # Lightweight feasibility filter (capacity, slice, sovereignty).
+            # Edge-level constraints (latency bounds, trust) are checked
+            # inside the predecessor loop below.
             if not _is_node_feasible_simple(stage, node, governance):
                 continue
 
-            # Local cost: load term
+            # Local cost term: beta * (rho_v / C_node).
+            # This is the load-balance contribution of placing this single
+            # stage on this node (the beta term of Eq. 10).
             local_cost = beta * (stage.computational_demand / max(node.capacity, 1e-12))
 
             if not predecessors:
-                # Leaf (source) stage: no children to account for
+                # Base case: source (leaf) stages have no predecessors, so
+                # the sub-tree cost is just the local load term.
                 dp[stage_id][ni] = local_cost
             else:
-                # Sum over predecessors (children in tree DP sense)
+                # --- Recurrence (Eq. 10 tree decomposition) ---
+                # dp[v][n] = local_cost(v, n)
+                #   + SUM over predecessors c:
+                #       min over m: dp[c][m] + alpha*lat(n,m) + gamma*cross(n,m)
+                #
+                # For each predecessor c, find the node m that minimises the
+                # combined cost of the sub-tree at c plus the edge cost from
+                # m to n (latency and domain-crossing penalty).
                 total = local_cost
                 child_choices: dict[str, int] = {}
                 feasible = True
@@ -584,18 +627,23 @@ def _dp_placement(
                     best_child_node = -1
 
                     for mi, mid in enumerate(node_ids):
+                        # Skip infeasible predecessor assignments.
                         if dp[pred_id][mi] >= INF:
                             continue
+                        # Latency constraint (Eq. 2): reject if the network
+                        # latency between candidate nodes exceeds the edge bound.
                         lat = topology.latency(nid, mid)
                         if lat > edge_bound + 1e-9:
                             continue
-                        # Trust check
+                        # Trust constraint (Eq. 5): cross-domain data flow
+                        # requires non-zero trust between domains.
                         pred_domain = topology.get_node(mid).domain_id
                         if pred_domain != node.domain_id:
                             if governance.get_trust(pred_domain, node.domain_id) <= 0.0:
                                 continue
 
                         cross = 1 if topology.get_node(mid).domain_id != node.domain_id else 0
+                        # Predecessor sub-tree cost + edge costs (latency + governance)
                         child_cost = dp[pred_id][mi] + alpha * lat + gamma * cross
 
                         if child_cost < best_child_cost:
@@ -603,6 +651,8 @@ def _dp_placement(
                             best_child_node = mi
 
                     if best_child_node < 0:
+                        # No feasible node exists for this predecessor when
+                        # the current stage is on node ni; abandon this candidate.
                         feasible = False
                         break
 
@@ -613,7 +663,10 @@ def _dp_placement(
                     dp[stage_id][ni] = total
                     choice[stage_id][ni] = child_choices
 
-    # Find the optimal assignment for the sink
+    # --- Optimal sink selection ---
+    # The pipeline sink is the root of the DP tree.  The globally optimal
+    # placement is obtained by choosing the node with the lowest dp value
+    # for the sink stage.
     sinks = dag.sinks()
     if len(sinks) != 1:
         # Fallback: pick the sink with lowest cost
@@ -630,7 +683,10 @@ def _dp_placement(
     if best_sink_node < 0:
         raise RuntimeError("No feasible DP placement found for the tree DAG.")
 
-    # Trace back
+    # --- Backtracking ---
+    # Starting from the optimal sink assignment, recursively follow the
+    # `choice` table to recover the optimal node assignment for every
+    # predecessor stage in the tree.
     placement: dict[str, str] = {}
 
     def _trace(stage_id: str, node_idx: int) -> None:

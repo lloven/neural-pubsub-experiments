@@ -261,22 +261,38 @@ def federated_route(
         should be sent to ``target_domain`` for delivery to
         ``target_cluster``.
     """
-    # Step 1: Local match
+    # --- Step 1: Check local match ---
+    # Compute cosine distance from the publication embedding to every cluster
+    # centroid in the local subscription summary.  If the nearest centroid is
+    # within `threshold` (tau), the publication is delivered locally and no
+    # federation traffic is generated.
     local_result = route_locally(publication_embedding, local_summary, threshold)
     if local_result is not None:
         return local_result
 
-    # Step 2: Federation candidates
+    # --- Step 2: Query peer summaries and compute cosine similarity ---
+    # Scan each peer domain's subscription summary.  A remote cluster is a
+    # candidate if the cosine distance to its centroid is less than
+    # (cluster.radius + threshold).  The radius accounts for intra-cluster
+    # spread, so even if the centroid is not close enough, a member
+    # subscription might be.  Candidates are returned sorted by distance.
     candidates = select_federation_candidates(
         publication_embedding, peer_summaries, threshold
     )
 
-    # Step 3: Governance filter
+    # --- Step 3: Apply governance filter ---
+    # Remove candidates that violate data sovereignty (publication type is
+    # restricted to the local domain) or trust constraints (the peer
+    # domain's trust level is below the minimum threshold).  The number of
+    # filtered candidates is tracked for diagnostic reporting.
     pre_filter_count = len(candidates)
     candidates = apply_governance_filter(candidates, data_type, governance)
     governance_filtered = pre_filter_count - len(candidates)
 
-    # Steps 4-5: Rank (already sorted) and select best
+    # --- Steps 4-5: Rank and return best match (or None) ---
+    # Candidates are already sorted by ascending cosine distance from
+    # step 2, so candidates[0] is the best match.  If no candidates
+    # survived the governance filter, return a no-match result.
     if not candidates:
         return RoutingResult(
             matched=False,
@@ -292,7 +308,7 @@ def federated_route(
         matched=True,
         target_domain=best_domain,
         target_cluster=best_cluster,
-        confidence=1.0 - best_dist,
+        confidence=1.0 - best_dist,  # confidence = cosine similarity
         forwarded=True,
         governance_filtered=governance_filtered,
     )

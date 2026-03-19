@@ -94,6 +94,7 @@ def injector(mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_kill_worker(injector, mock_docker_client, tracker):
+    """Killing a worker calls Container.kill() and records a worker_kill event."""
     asyncio.get_event_loop().run_until_complete(
         injector.kill_worker("worker-d1-nearrt-1")
     )
@@ -112,6 +113,7 @@ def test_kill_worker(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_restart_worker(injector, mock_docker_client, tracker):
+    """Restarting a previously killed worker records a recovery event with positive adaptation time."""
     loop = asyncio.get_event_loop()
     # Must kill first
     loop.run_until_complete(injector.kill_worker("worker-d1-nearrt-1"))
@@ -134,6 +136,7 @@ def test_restart_worker(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_restart_worker_not_killed_raises(injector):
+    """Restarting a worker that was never killed raises KeyError."""
     with pytest.raises(KeyError, match="not killed"):
         asyncio.get_event_loop().run_until_complete(
             injector.restart_worker("worker-d1-nearrt-1")
@@ -145,6 +148,7 @@ def test_restart_worker_not_killed_raises(injector):
 # ---------------------------------------------------------------------------
 
 def test_kill_broker(injector, mock_docker_client, tracker):
+    """Killing a broker records a broker_kill event (distinct from worker_kill)."""
     asyncio.get_event_loop().run_until_complete(
         injector.kill_broker("broker-d1")
     )
@@ -160,12 +164,11 @@ def test_kill_broker(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_network_partition(injector, mock_docker_client, tracker):
+    """Partitioning a network calls Network.disconnect() and records a network_partition event."""
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
         injector.partition_network("broker-d2", "federation")
     )
-
-    # Network.disconnect() was called with the container
     mock_docker_client._mock_networks["federation"].disconnect.assert_called_once()
     events = tracker.all_events()
     assert len(events) == 1
@@ -178,6 +181,7 @@ def test_network_partition(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_heal_partition(injector, mock_docker_client, tracker):
+    """Healing a partition calls Network.connect() and records a recovery event with adaptation time."""
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
         injector.partition_network("broker-d2", "federation")
@@ -200,6 +204,7 @@ def test_heal_partition(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_partial_input_failure(injector, mock_docker_client, tracker):
+    """Killing multiple workers records individual kills plus a composite partial_input event."""
     loop = asyncio.get_event_loop()
     targets = ["worker-d1-nearrt-1", "worker-d1-nearrt-2"]
     loop.run_until_complete(injector.kill_partial_inputs(targets))
@@ -221,6 +226,7 @@ def test_partial_input_failure(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_run_scenario_worker_kill(injector, mock_docker_client, tracker):
+    """Full worker_kill scenario: kill then auto-restart, producing both failure and recovery events."""
     config = FailureConfig(
         failure_type="worker_kill",
         target_id="worker-d1-edge-1",
@@ -243,6 +249,7 @@ def test_run_scenario_worker_kill(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_run_scenario_network_partition(injector, mock_docker_client, tracker):
+    """Full network_partition scenario: disconnect then reconnect the federation network."""
     config = FailureConfig(
         failure_type="network_partition",
         target_id="broker-d2",
@@ -261,6 +268,7 @@ def test_run_scenario_network_partition(injector, mock_docker_client, tracker):
 # ---------------------------------------------------------------------------
 
 def test_run_scenario_unknown_type_raises(injector):
+    """An unrecognised failure_type in FailureConfig raises ValueError."""
     config = FailureConfig(failure_type="unknown_type", target_id="x")
     with pytest.raises(ValueError, match="Unknown failure type"):
         asyncio.get_event_loop().run_until_complete(
@@ -273,9 +281,8 @@ def test_run_scenario_unknown_type_raises(injector):
 # ---------------------------------------------------------------------------
 
 def test_active_failures(injector, mock_docker_client):
+    """active_failures dict tracks killed containers and partitions, clearing them on recovery."""
     loop = asyncio.get_event_loop()
-
-    # Initially empty
     assert injector.active_failures == {
         "killed_containers": [],
         "partitions": [],
@@ -301,9 +308,8 @@ def test_active_failures(injector, mock_docker_client):
 # ---------------------------------------------------------------------------
 
 def test_cleanup(injector, mock_docker_client):
+    """cleanup() restores all killed containers and healed partitions, leaving active_failures empty."""
     loop = asyncio.get_event_loop()
-
-    # Create some failures
     loop.run_until_complete(injector.kill_worker("worker-d1-nearrt-1"))
     loop.run_until_complete(injector.kill_broker("broker-d2"))
     loop.run_until_complete(

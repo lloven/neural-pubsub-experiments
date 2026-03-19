@@ -54,6 +54,7 @@ def test_add_edge():
 # ---------------------------------------------------------------------------
 
 def test_duplicate_stage_raises():
+    """Adding a stage with an already-existing ID raises ValueError."""
     dag = PipelineDAG()
     dag.add_stage(_stage("dup"))
     with pytest.raises(ValueError, match="dup"):
@@ -65,6 +66,7 @@ def test_duplicate_stage_raises():
 # ---------------------------------------------------------------------------
 
 def test_cycle_detection():
+    """Adding an edge that would close a cycle (z->x in x->y->z) raises ValueError."""
     dag = PipelineDAG()
     dag.add_stage(_stage("x"))
     dag.add_stage(_stage("y"))
@@ -81,6 +83,7 @@ def test_cycle_detection():
 # ---------------------------------------------------------------------------
 
 def test_topological_sort():
+    """Topological order of a linear chain s1->s2->s3->s4 preserves predecessor ordering."""
     dag = PipelineDAG()
     for sid in ["s1", "s2", "s3", "s4"]:
         dag.add_stage(_stage(sid))
@@ -101,7 +104,7 @@ def test_topological_sort():
 # ---------------------------------------------------------------------------
 
 def test_sources_and_sinks():
-    # Funnel: two inputs -> one merge -> one output
+    """Funnel DAG (two inputs -> merge -> output) has two sources and one sink."""
     dag = PipelineDAG()
     for sid in ["in0", "in1", "merge", "out"]:
         dag.add_stage(_stage(sid))
@@ -120,8 +123,7 @@ def test_sources_and_sinks():
 # ---------------------------------------------------------------------------
 
 def test_is_tree_linear_chain():
-    # Linear chain: a -> b -> c -> d
-    # No fan-out, one sink -> tree (DP-eligible)
+    """Linear chain (no fan-out, one sink) is classified as a tree (DP-eligible)."""
     dag = PipelineDAG()
     for sid in ["a", "b", "c", "d"]:
         dag.add_stage(_stage(sid))
@@ -132,9 +134,7 @@ def test_is_tree_linear_chain():
 
 
 def test_is_tree_funnel():
-    # Funnel (fan-in): in0 -> merge <- in1, merge -> out
-    # No fan-out, one sink -> tree (DP-eligible)
-    # Fan-in is safe because predecessor subtrees are independent
+    """Fan-in (funnel) with one sink is still a tree; predecessor subtrees are independent."""
     dag = PipelineDAG()
     for sid in ["in0", "in1", "merge", "out"]:
         dag.add_stage(_stage(sid))
@@ -145,8 +145,7 @@ def test_is_tree_funnel():
 
 
 def test_is_tree_false_fanout():
-    # Binary fan-out: root -> left, root -> right (two sinks)
-    # Fan-out means root's placement affects both branches -> not DP-safe
+    """Fan-out (root -> left, root -> right) is not a tree; root placement couples both branches."""
     dag = PipelineDAG()
     for sid in ["root", "left", "right"]:
         dag.add_stage(_stage(sid))
@@ -160,8 +159,7 @@ def test_is_tree_false_fanout():
 # ---------------------------------------------------------------------------
 
 def test_is_tree_false_diamond():
-    # Diamond: root -> left -> sink, root -> right -> sink
-    # root has 2 successors (fan-out) -> not DP-safe
+    """Diamond DAG (root fans out then merges) is not a tree due to fan-out at root."""
     dag = PipelineDAG()
     for sid in ["root", "left", "right", "sink"]:
         dag.add_stage(_stage(sid))

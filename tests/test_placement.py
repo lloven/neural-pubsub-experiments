@@ -58,6 +58,7 @@ def _empty_governance() -> GovernancePolicy:
 # ---------------------------------------------------------------------------
 
 def test_single_stage_single_node():
+    """Trivial case: one stage, one node, placement must be deterministic."""
     dag = PipelineDAG()
     dag.add_stage(_simple_stage("s1", demand=0.5))
     node = _simple_node("n1")
@@ -73,7 +74,7 @@ def test_single_stage_single_node():
 # ---------------------------------------------------------------------------
 
 def test_greedy_respects_capacity():
-    # One stage with demand 0.8; node has capacity 1.0 but load 0.6 -> residual 0.4
+    """Stage with demand 0.8 must skip a node whose residual capacity is only 0.4."""
     dag = PipelineDAG()
     dag.add_stage(_simple_stage("s1", demand=0.8))
     overloaded = _simple_node("n_full", capacity=1.0, load=0.6)
@@ -91,6 +92,7 @@ def test_greedy_respects_capacity():
 # ---------------------------------------------------------------------------
 
 def test_greedy_respects_slice():
+    """Stage requiring URLLC must not be placed on an eMBB-only node."""
     dag = PipelineDAG()
     dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="URLLC"))
     wrong_slice = _simple_node("n_embb", sl="eMBB")
@@ -107,6 +109,7 @@ def test_greedy_respects_slice():
 # ---------------------------------------------------------------------------
 
 def test_greedy_respects_sovereignty():
+    """Stage with data_sovereignty_domain must be placed in the matching domain."""
     dag = PipelineDAG()
     dag.add_stage(
         Stage(
@@ -131,7 +134,7 @@ def test_greedy_respects_sovereignty():
 # ---------------------------------------------------------------------------
 
 def test_dp_placement_tree():
-    # CQI pipeline (tree) on 3 URLLC nodes; all stages require URLLC.
+    """DP placement of CQI pipeline (tree DAG) on 3 URLLC nodes respects sovereignty and slice."""
     # The 'collect' stage uses __local__ sovereignty domain, which the broker
     # resolves to the actual domain_id at runtime. In this unit test we
     # simulate that resolution by setting the sovereignty to "edge_local"
@@ -173,6 +176,7 @@ def test_dp_placement_tree():
 # ---------------------------------------------------------------------------
 
 def test_feasibility_check_pass():
+    """A valid placement on a single node with sufficient capacity reports no violations."""
     dag = PipelineDAG()
     dag.add_stage(_simple_stage("s1", demand=0.3))
     dag.add_stage(_simple_stage("s2", demand=0.3))
@@ -193,8 +197,8 @@ def test_feasibility_check_pass():
 # ---------------------------------------------------------------------------
 
 def test_feasibility_check_violations():
+    """Placement with slice mismatch and cross-node latency exceeding the edge bound is infeasible."""
     dag = PipelineDAG()
-    # Stage with high demand that will overflow capacity
     dag.add_stage(Stage("s1", "ingest", computational_demand=0.9, output_data_rate=5.0, slice_requirement="URLLC"))
     dag.add_stage(Stage("s2", "process", computational_demand=0.9, output_data_rate=2.0))
     dag.add_edge(Edge("s1", "s2", latency_bound=1.0))  # tight latency bound
@@ -223,6 +227,7 @@ def test_feasibility_check_violations():
 # ---------------------------------------------------------------------------
 
 def test_cross_domain_trust():
+    """Cross-domain edge without a trust entry in GovernancePolicy must be flagged infeasible."""
     dag = PipelineDAG()
     dag.add_stage(_simple_stage("s1", demand=0.2))
     dag.add_stage(_simple_stage("s2", demand=0.2))

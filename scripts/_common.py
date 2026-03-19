@@ -1,7 +1,20 @@
-"""Shared infrastructure for phase runner scripts.
+"""Shared infrastructure for all phase runner scripts (A through E).
 
-Provides constants, Docker Compose orchestration helpers, failure injection,
-and the common main() loop (argparse, validation, run loop, CSV summary).
+Provides:
+  - Constants: PROJECT_ROOT, COMPOSE_FILE, DEFAULT_SEEDS.
+  - Docker Compose orchestration: compose_up / compose_down for starting
+    and tearing down experiment stacks.
+  - Failure injection helpers: inject_compose_kill (container kill),
+    inject_network_partition (Docker network disconnect),
+    inject_scale_down (replica reduction).
+  - Generic single-run executor (run_single) that wraps compose lifecycle
+    and result collection.
+  - Shared CLI main loop (phase_main) with argparse, config validation,
+    combinatorial run matrix execution, and CSV summary generation.
+
+All phase runners (run_phase_a.py through run_phase_d.py) import from this
+module; phase-specific logic is limited to config definitions, run-matrix
+construction, and environment variable mapping.
 """
 
 from __future__ import annotations
@@ -41,7 +54,17 @@ def compose_up(
     compose process begins.  The function should contain its own ``sleep()``
     before the actual failure injection.
 
-    Raises nothing -- failures are logged, and cleanup is left to the caller.
+    Args:
+        project_name: Docker Compose project name (``-p`` flag).
+        compose_file: Path to the docker-compose YAML file.
+        env: Environment variable overrides merged with ``os.environ``.
+        timeout_s: Maximum wall-clock seconds before the process is killed.
+        failure_fn: Optional zero-argument callable executed in a daemon
+            thread.  Should sleep internally before injecting the failure.
+
+    Returns:
+        None.  Failures are logged; cleanup is left to the caller via
+        :func:`compose_down`.
     """
     compose_env = {**os.environ, **env}
     cmd = [
@@ -78,7 +101,17 @@ def compose_down(
     compose_file: Path,
     env: dict[str, str],
 ) -> None:
-    """Run ``docker compose down`` to clean up a project."""
+    """Run ``docker compose down`` to clean up a project.
+
+    Removes containers, volumes, and orphan services. Never raises;
+    failures are silently ignored (check=False) so that cleanup is
+    best-effort even if the stack is already down.
+
+    Args:
+        project_name: Docker Compose project name.
+        compose_file: Path to the docker-compose YAML file.
+        env: Environment variable overrides (same dict passed to compose_up).
+    """
     compose_env = {**os.environ, **env}
     subprocess.run(
         [
@@ -107,6 +140,14 @@ def inject_compose_kill(
     """Sleep *delay_s* seconds, then ``docker compose kill <target>``.
 
     Intended to be run inside a daemon thread started by :func:`compose_up`.
+
+    Args:
+        project_name: Docker Compose project name.
+        compose_file: Path to the docker-compose YAML file.
+        env: Environment variable overrides.
+        target: Compose service name to kill (e.g., ``"worker"``).
+        delay_s: Seconds to wait before injecting the failure.
+        label: Human-readable label for log messages (e.g., ``"broker"``).
     """
     logger.info(
         "Failure thread [%s]: waiting %ds before killing %s",
@@ -139,6 +180,13 @@ def inject_network_partition(
     """Sleep *delay_s*, then disconnect all containers from a Docker network.
 
     The network name is ``<project_name>_<target>``.
+
+    Args:
+        project_name: Docker Compose project name (used to derive the
+            full Docker network name).
+        target: Network suffix (e.g., ``"federation-net"``).  The actual
+            Docker network disconnected is ``<project_name>_<target>``.
+        delay_s: Seconds to wait before injecting the partition.
     """
     logger.info(
         "Failure thread [network]: waiting %ds before disconnecting %s",
@@ -176,7 +224,20 @@ def inject_scale_down(
     delay_s: int,
     replicas: int = 1,
 ) -> None:
-    """Sleep *delay_s*, then scale *target* down to *replicas*."""
+    """Sleep *delay_s*, then scale *target* down to *replicas*.
+
+    Used for funnel partial-input failure simulation (Phase D, D4),
+    where a subset of sensor workers are removed to test wait/proceed/abort
+    semantics.
+
+    Args:
+        project_name: Docker Compose project name.
+        compose_file: Path to the docker-compose YAML file.
+        env: Environment variable overrides.
+        target: Compose service name to scale (e.g., ``"sensor-worker"``).
+        delay_s: Seconds to wait before scaling down.
+        replicas: Target replica count after scale-down (default 1).
+    """
     logger.info(
         "Failure thread [funnel]: waiting %ds before scaling %s to %d",
         delay_s, target, replicas,

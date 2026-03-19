@@ -113,6 +113,10 @@ class PipelineTrace:
 
         Returns None if either endpoint timestamp is missing.
         """
+        # End-to-end latency spans the entire pipeline lifecycle: from the
+        # moment the broker creates the pipeline request ('created') to the
+        # moment the final stage result is delivered back ('delivered').
+        # This includes queueing, network transfer, and compute at every stage.
         t_start = self._first_ts("created")
         t_end = self._last_ts("delivered")
         if t_start is None or t_end is None:
@@ -126,6 +130,10 @@ class PipelineTrace:
         included. When multiple records exist for the same stage (retries),
         the first start and last end are used.
         """
+        # Collect the first 'stage_start' and last 'stage_end' per stage.
+        # Using setdefault for starts captures the first attempt; overwriting
+        # ends captures the final completion (relevant when a stage is retried
+        # after a dispatch failure).
         starts: dict[str, float] = {}
         ends: dict[str, float] = {}
         for r in self.timestamps:
@@ -133,6 +141,9 @@ class PipelineTrace:
                 starts.setdefault(r.stage_id, r.timestamp)
             elif r.event == "stage_end":
                 ends[r.stage_id] = r.timestamp
+        # Per-stage compute latency = stage_end - stage_start (in ms).
+        # This isolates the time a worker spent executing the stage logic,
+        # excluding network transfer and queueing delays.
         result: dict[str, float] = {}
         for stage_id in starts:
             if stage_id in ends:
@@ -148,7 +159,8 @@ class PipelineTrace:
         Stages are ordered by their first 'stage_start' timestamp. Only
         consecutive stage pairs where both endpoints exist are returned.
         """
-        # Collect first stage_start per stage for ordering
+        # Collect first stage_start per stage (for temporal ordering) and
+        # the end/start timestamps needed for the inter-stage gap calculation.
         stage_first_start: dict[str, float] = {}
         stage_end_ts: dict[str, float] = {}
         stage_start_ts: dict[str, float] = {}
@@ -160,8 +172,13 @@ class PipelineTrace:
             elif r.event == "stage_end":
                 stage_end_ts[r.stage_id] = r.timestamp
 
+        # Sort stages by their first execution start time so that
+        # consecutive pairs reflect the actual pipeline data flow.
         ordered = sorted(stage_first_start, key=lambda s: stage_first_start[s])
 
+        # Network latency for edge (stage_i -> stage_j) is the gap between
+        # stage_i finishing and stage_j starting.  This captures serialisation,
+        # network transfer, and any queueing delay between the two workers.
         result: dict[tuple[str, str], float] = {}
         for i in range(len(ordered) - 1):
             src = ordered[i]
@@ -356,16 +373,21 @@ class MetricsCollector:
         percentiles (via numpy), throughput, and any federation / adaptation
         data accumulated via companion monitors.
         """
+        # Snapshot all traces under lock, then release the lock for the
+        # (potentially expensive) numpy computations.
         async with self._lock:
             traces = list(self._traces.values())
 
+        # Partition traces into completed (success=True) and failed.
         total = len(traces)
         completed_traces = [t for t in traces if t.success]
         failed_traces = [t for t in traces if not t.success]
         completed = len(completed_traces)
         failed = len(failed_traces)
 
-        # Throughput
+        # --- Throughput ---
+        # Defined as completed pipelines divided by the wall-clock duration
+        # of the entire experiment (first record to last completion).
         wall_start = self._wall_start
         wall_end = self._wall_end
         if wall_start and wall_end and (wall_end - wall_start) > 0:
@@ -373,7 +395,11 @@ class MetricsCollector:
         else:
             throughput = 0.0
 
-        # Latency distribution
+        # --- Latency distribution (percentiles via numpy) ---
+        # Collect end-to-end latencies from all completed traces, then
+        # compute mean, p50 (median), p95, and p99.  These percentiles
+        # characterise the tail-latency behaviour of the placement and
+        # dispatch pipeline (reported in Table 2 of the paper).
         latencies = [
             lat
             for t in completed_traces
@@ -389,7 +415,10 @@ class MetricsCollector:
         else:
             lat_mean = lat_p50 = lat_p95 = lat_p99 = 0.0
 
-        # Per-stage mean latency
+        # --- Per-stage mean latency breakdown ---
+        # For each stage_id that appears across completed traces, accumulate
+        # all its compute-latency samples and take the mean.  This enables a
+        # per-stage bottleneck analysis in the results section.
         stage_latency_accum: dict[str, list[float]] = {}
         for t in completed_traces:
             for stage_id, lat_ms in t.stage_latencies_ms().items():
@@ -399,7 +428,8 @@ class MetricsCollector:
             for sid, vals in stage_latency_accum.items()
         }
 
-        # Domain crossings mean
+        # --- Domain crossings ---
+        # Mean number of sovereignty-domain boundaries crossed per pipeline.
         crossings = [t.domain_crossings() for t in completed_traces]
         crossings_mean = float(np.mean(crossings)) if crossings else 0.0
 
@@ -436,7 +466,9 @@ class MetricsCollector:
         async with self._lock:
             traces = list(self._traces.values())
 
-        # Collect all stage_ids across all traces for consistent columns
+        # Build the union of all stage_ids seen across every trace so that
+        # the CSV has a consistent set of columns regardless of which stages
+        # each individual pipeline executed.
         all_stage_ids: list[str] = sorted(
             {
                 sid
@@ -445,6 +477,15 @@ class MetricsCollector:
             }
         )
 
+        # CSV column layout:
+        #   pipeline_id      -- unique pipeline instance identifier
+        #   pipeline_type    -- logical pipeline template name
+        #   success          -- True/False completion status
+        #   error            -- error message (empty string if successful)
+        #   e2e_latency_ms   -- end-to-end latency (created -> delivered)
+        #   stage_<sid>_ms   -- one column per unique stage_id, holding the
+        #                       compute latency for that stage in this run
+        #                       (empty if the stage was not present)
         fieldnames = (
             ["pipeline_id", "pipeline_type", "success", "error", "e2e_latency_ms"]
             + [f"stage_{sid}_ms" for sid in all_stage_ids]

@@ -1,13 +1,32 @@
+# Domain 2 broker configuration (emulates Oulu / 5GTNF).
+# Same structure as domain_d1.yaml; see that file for detailed field docs.
+
+# Unique domain identifier.
 domain_id: d2
+
+# Broker service name (matches Docker Compose service).
 broker_id: broker-d2
+
+# HTTP port the broker listens on.
 port: 8080
+
+# --- Placement cost weights (Eq. 10) ---
+# alpha: latency sensitivity, beta: load-balance, gamma: governance penalty.
 alpha: 1.0
 beta: 1.0
 gamma: 1.0
+
+# Federation peer URLs. D2 peers with D1.
 peer_urls:
   - http://broker-d1:8080
+
+# Summary propagation interval (seconds).
 summary_interval_s: 10.0
+
+# Governance: stage types that must stay local.
 local_stage_types:
   - collect  # raw radio data stays local
+
+# Trust levels with peer domains.
 trust_levels:
   d1: 0.8  # trust level with domain d1

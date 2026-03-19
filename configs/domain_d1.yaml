@@ -1,13 +1,44 @@
+# Domain 1 broker configuration (emulates Tokyo / Nakao Lab Local6G).
+# This file parameterises the Neural Broker for a single administrative domain.
+
+# Unique domain identifier. Used in federation routing, governance checks,
+# and placement decisions. Must match the --domain CLI argument.
 domain_id: d1
+
+# Broker service name (matches the Docker Compose service name).
+# Used for self-identification in federation summary messages.
 broker_id: broker-d1
+
+# HTTP port the broker listens on (FastAPI server).
 port: 8080
+
+# --- Placement cost weights (Eq. 10 in the paper) ---
+# The placement algorithm minimises: alpha*latency + beta*load_imbalance + gamma*governance_cost
+# Each weight controls the relative importance of its cost term.
+# alpha: latency sensitivity (higher = prefer low-latency placements)
 alpha: 1.0
+# beta: load-balance sensitivity (higher = prefer even utilisation across workers)
 beta: 1.0
+# gamma: governance/domain-crossing penalty (higher = prefer keeping stages in-domain)
 gamma: 1.0
+
+# Federation peer URLs. The broker periodically pushes subscription summaries
+# to these peers and accepts forwarded pipelines from them.
 peer_urls:
   - http://broker-d2:8080
+
+# Interval (seconds) between subscription summary pushes to peers.
+# Controls the federation protocol's convergence speed vs bandwidth overhead.
 summary_interval_s: 10.0
+
+# Governance: stage types that must execute locally (sovereignty constraint).
+# Stages in this list are never forwarded to a remote domain.
+# Example: "collect" handles raw radio data that must stay within this domain.
 local_stage_types:
   - collect  # raw radio data stays local
+
+# Trust levels with peer domains (0.0 = untrusted, 1.0 = fully trusted).
+# Used by the governance filter in cross-domain routing (Section 4.2.3).
+# Stages with sensitivity above the trust level are not forwarded to that peer.
 trust_levels:
   d2: 0.8  # trust level with domain d2
