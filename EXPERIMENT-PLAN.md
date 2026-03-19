@@ -196,21 +196,20 @@ Items that must be resolved before travelling. Send Nakao Lab and 5GTNF emails a
 
 ### Software readiness
 
-- [ ] **Kafka baseline:** Implement Kafka-based static broker for Phase A1/C1 comparison, OR redefine baseline as round-robin HTTP dispatch (document decision)
-- [x] **Semantic matcher decision (2026-03-19):** Simulated matching is sufficient. This paper evaluates the distribution architecture (federation, placement, slicing, failure recovery), not matching quality. Pipeline types are explicit in the workload generator. Matching quality is evaluated in the companion Neural Router paper (to be published/arXived before this submission). Document in paper Section 5.2.
+- [ ] **Kafka baseline:** Implement round-robin HTTP dispatch as the static centralised baseline for Phase A1/C1, OR scope out and use only A2 (static placement) as baseline
 - [ ] **Testbed deployment script:** Create `scripts/deploy.py` for SCP + SSH container deployment to remote nodes
 - [ ] **Testbed compose template:** Create `docker-compose.testbed.yaml` parameterised by `testbed-config.yaml`
 - [ ] **Phase E (EISim):** Pre-build EISim federation extension, OR explicitly mark Phase E as stretch goal / future work
 - [ ] **Runtime estimate:** Calculate actual Phase A runtime (4 configs x 9 combos x 5 runs x 40 min = 120h). Plan parallel execution or reduce matrix
+- [ ] **Result backup:** Set up automated SCP of results/ to an external host after each run completion
 
 ### Connectivity
 
 - [ ] **5GTNF VPN test:** If credentials arrive before departure, test VPN and ping from Oulu
-- [x] **OpenAI API not needed:** Simulated matching means no external API dependency. Experiment runs fully offline.
 
-### Logistics
+### Resolved
 
-- [ ] **Result backup:** Set up automated SCP of results/ to an external host after each run completion
+- [x] **Semantic matcher (2026-03-19):** Simulated matching sufficient. Distribution architecture is the focus; matching quality evaluated in companion Neural Router paper. No LLM/API dependency. Document in paper Section 5.2.
 
 ---
 
