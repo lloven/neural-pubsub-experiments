@@ -21,12 +21,12 @@ The experiment answers three questions about distributing AI inference pipelines
 
 | ID | Hypothesis | Phase |
 |----|-----------|-------|
-| H1 | Neural Pub/Sub achieves lower p95 end-to-end latency than Kafka and static-placement baselines under equivalent workload | A |
-| H2 | Neural Pub/Sub achieves higher throughput (completed pipelines/s) than baselines at all tested arrival rates | A |
-| H3 | Slice-aware placement reduces cross-slice latency compared to slice-unaware placement | B |
-| H4 | Governance constraints (data sovereignty) add less than 20% latency overhead relative to unconstrained placement | B, C |
-| H5 | Federation overhead (summary propagation + cross-domain routing) grows linearly with the number of domains, not exponentially | C, E |
-| H6 | The system recovers from single-point failures (worker, broker, partition) within two propagation intervals | D |
+| H1 | Under heterogeneous slice constraints, Neural Pub/Sub achieves lower p95 end-to-end latency than static and random placement baselines | B |
+| H2 | Neural Pub/Sub maintains throughput within 15% of Kafka while providing semantic routing, governance enforcement, and cross-domain federation | A |
+| H3 | Slice-aware placement reduces p95 latency compared to flat (single-slice) deployment | B |
+| H4 | Governance constraints (data sovereignty enforcement) introduce measurable but bounded latency overhead | B, C |
+| H5 | Under hierarchical federation, summary propagation overhead grows linearly with the number of domains | C, E |
+| H6 | The system recovers from single-point failures within two summary propagation intervals, with detection time and re-placement time reported separately | D |
 
 ## 3. Experimental Variables
 
@@ -34,7 +34,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 | Variable | Values | Rationale |
 |----------|--------|-----------|
-| **Distribution strategy** | Kafka (centralised), static (fixed), random, Neural Pub/Sub (semantic) | Baseline comparison |
+| **Distribution strategy** | S1: Kafka (centralised), S2: static (round-robin), S3: random, S4: Neural Pub/Sub (semantic) | Baseline comparison |
 | **Arrival rate** | Low (2/s), medium (5/s), high (10/s) | Stress test placement under load |
 | **Pipeline complexity** | 2, 3, 5 stages | Tests DAG placement scaling |
 | **Number of slices** | 1, 3 | Tests slice-aware placement value |
@@ -65,7 +65,7 @@ The experiment answers three questions about distributing AI inference pipelines
 |----------|-------|-----------|
 | Measurement window | 30 minutes (after 10-minute warm-up) | Steady-state measurement |
 | Seeds per configuration | 5 (reduces to 3 if runtime budget exceeded) | Statistical significance |
-| Pipeline types | CQI prediction (3-stage, URLLC), anomaly detection (3-stage, eMBB), sensor fusion (5-stage, multi-slice) | Representative 6G RAN use cases |
+| Pipeline types | CQI prediction (3-stage map-map-map, URLLC), anomaly detection (3-stage map-map-map, eMBB), sensor fusion (5-stage funnel: 3 inputs + fusion + report, multi-slice) | Representative 6G RAN use cases |
 | Embedding model | all-MiniLM-L6-v2 (pre-downloaded, CPU-only, deterministic) | Reproducibility |
 | Semantic matching | Simulated (deterministic template matching, not LLM-based) | Isolates distribution architecture; matching quality evaluated in companion Neural Router paper |
 | Worker processing time | Configurable per stage type (simulated compute with calibrated delays) | Controlled comparison across strategies |
@@ -90,6 +90,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Expected outputs:**
 - Latency CDF plots (A1-A4 overlaid, per complexity level)
+- Phase A answers RQ1 for flat single-site comparison. The key finding is the latency-throughput tradeoff: Neural Pub/Sub may show higher routing latency but the placement algorithm provides benefits under heterogeneous conditions (tested in Phase B).
 - Throughput vs. arrival rate (A1-A4 overlaid)
 - Latency decomposition (routing + transfer + compute) stacked bar chart
 - Routing accuracy table (A4 vs. companion Neural Router paper results)
@@ -174,19 +175,21 @@ The experiment answers three questions about distributing AI inference pipelines
 
 ## 5. Baselines
 
-### A1: Kafka + static topic routing
+Throughout this document, distribution strategies are labeled S1-S4 when discussed generically. In Phase A, these correspond to configs A1-A4. In other phases, the strategy is fixed (S4 for Phases B-D) and configs vary other parameters.
+
+### S1 (A1): Kafka + static topic routing
 
 An Apache Kafka broker mediates between workload generator and workers. Each pipeline type maps to a Kafka topic. Workers consume from their assigned topic. Placement is static (pre-configured topic-to-worker mapping). This represents the industry-standard centralised pub/sub approach.
 
 **Implementation:** `src/broker/kafka_broker.py` subclasses `BaseBroker`. Adds Kafka producer lifecycle. Placement returns a `"kafka"` sentinel; dispatch sends pipeline stages as Kafka messages. Workers consume via `aiokafka`.
 
-### A2: Static placement (round-robin)
+### S2 (A2): Static placement (round-robin)
 
 An HTTP-based broker dispatches stages to workers in round-robin order. No semantic matching, no load awareness. Workers are cycled in registration order.
 
 **Implementation:** `src/broker/static_broker.py` with `PlacementStrategy.ROUND_ROBIN`.
 
-### A3: Random placement
+### S3 (A3): Random placement
 
 Same HTTP-based broker, but workers are selected uniformly at random for each stage. Provides a lower bound on any intelligent placement.
 
@@ -202,6 +205,16 @@ All baselines use the same:
 - Docker deployment (same container image, same resource limits)
 
 The only variable is the placement decision and dispatch mechanism.
+
+### Kafka baseline configuration
+
+The Kafka baseline uses:
+- Apache Kafka (Confluent image) with a single broker
+- Partition count equal to worker count (one partition per worker for fair comparison)
+- `acks=1` (leader acknowledgment, not full ISR)
+- Default `batch.size` (16384 bytes) and `linger.ms` (0ms)
+- JVM heap: 1GB (`KAFKA_HEAP_OPTS=-Xmx1G -Xms1G`)
+- One topic per pipeline type (3 topics: cqi_prediction, anomaly_detection, sensor_fusion)
 
 ## 6. Testbed Configuration
 
@@ -254,6 +267,14 @@ Results are exported as CSV via the broker's `/metrics/export` endpoint or by th
 - Latency CDFs use all pipeline instances from all seeds (thousands of data points per configuration)
 - Phase D recovery times are reported per-event (5 events per configuration, one per seed)
 
+### Run ordering
+
+Phase A runs (180 configurations) are executed in randomized order to mitigate ordering effects (thermal throttling, Docker daemon state drift, host system load variation). The randomization seed is fixed for reproducibility. Phases B-D are smaller matrices (20 runs each) and are run sequentially by configuration, with a 60-second cool-down between runs.
+
+### Steady-state validation
+
+The 10-minute warm-up period is validated by monitoring throughput over 30-second sliding windows. Measurement begins only after the throughput coefficient of variation (CV) across consecutive windows drops below 0.1. If steady state is not reached within 10 minutes, the warm-up is extended automatically. A representative warm-up trace is included in supplementary results to demonstrate transient behaviour.
+
 ## 8. Semantic Matching Decision
 
 The Neural Router's LLM-based semantic matching is **not** used in this experiment. Instead, pipeline types are matched deterministically (the workload generator specifies the pipeline type explicitly in each publish request).
@@ -268,11 +289,12 @@ The experiment must produce data sufficient to evaluate all six hypotheses:
 
 | Claim | Data source | Minimum evidence |
 |-------|------------|-----------------|
-| Semantic routing outperforms baselines (H1, H2) | Phase A | Statistically significant latency reduction and throughput improvement (A4 vs. A1/A2/A3) across at least 2 of 3 workload rates |
-| Slice-aware placement reduces latency (H3) | Phase B | B2 p95 latency < B1 p95 latency with p < 0.05 |
-| Governance overhead is bounded (H4) | Phase B, C | B3 p95 latency < 1.2 x B2 p95 latency; C3 p95 latency < 1.2 x C2 p95 latency |
-| Federation scales linearly (H5) | Phase C, E | Summary propagation bandwidth proportional to domain count; per-pipeline routing overhead constant |
-| Recovery within bounded time (H6) | Phase D | All D1-D4 recovery times < 2 x health_check_interval (configurable, default 5s) |
+| Intelligent placement outperforms baselines under heterogeneity (H1) | Phase B | B2 (3-slice Neural) p95 latency < A2 (static) p95 latency with p < 0.05 (KS test on per-pipeline latency distributions) |
+| Throughput parity with capabilities (H2) | Phase A | A4 throughput >= 0.85 x A1 throughput at all tested rates |
+| Slice-aware placement reduces latency (H3) | Phase B | B2 p95 < B1 p95 with p < 0.05 |
+| Governance overhead is bounded (H4) | Phase B, C | Report B3/B2 and C3/C2 latency ratios with confidence intervals |
+| Federation scales linearly (H5) | Phase C, E | If Phase E completed: summary bandwidth proportional to domain count under hierarchical topology. If not: report 2-domain overhead and state scaling as conjecture |
+| Recovery within bounded time (H6) | Phase D | Report detection time and re-placement time separately. Both < 2 x summary_interval_s for D1-D4 |
 
 ## 10. Reproducibility
 
