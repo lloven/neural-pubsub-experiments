@@ -1,17 +1,19 @@
 """Unit tests for baseline brokers (static_broker and kafka_broker).
 
-Tests the StaticBroker placement logic (round-robin and random) without
-requiring a running Kafka cluster or Docker infrastructure.
+Tests the StaticBroker and KafkaBroker placement logic without requiring
+a running Kafka cluster or Docker infrastructure.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 
 import pytest
-import pytest_asyncio
 
-from src.broker.static_broker import StaticBroker
+from src.broker.kafka_broker import KafkaBroker
+from src.broker.models import WorkerInfo
+from src.broker.static_broker import PlacementStrategy, StaticBroker
 
 
 # ---------------------------------------------------------------------------
@@ -19,14 +21,12 @@ from src.broker.static_broker import StaticBroker
 # ---------------------------------------------------------------------------
 
 
-async def _register_workers(broker: StaticBroker, n: int) -> list[str]:
+async def _register_workers(broker: StaticBroker | KafkaBroker, n: int) -> list[str]:
     """Register *n* workers with the broker and return their node_ids."""
     node_ids = []
     for i in range(n):
         nid = f"worker-{i}"
         async with broker._workers_lock:
-            from src.broker.static_broker import WorkerInfo
-
             broker._workers[nid] = WorkerInfo(
                 node_id=nid,
                 domain_id="d1",
@@ -36,12 +36,12 @@ async def _register_workers(broker: StaticBroker, n: int) -> list[str]:
             )
             node_ids.append(nid)
     async with broker._workers_lock:
-        broker._rebuild_cycle()
+        broker._on_worker_change()
     return node_ids
 
 
 # ---------------------------------------------------------------------------
-# test_static_broker_round_robin
+# StaticBroker: round-robin
 # ---------------------------------------------------------------------------
 
 
@@ -51,7 +51,6 @@ async def test_static_broker_round_robin():
     broker = StaticBroker(domain_id="d1", broker_id="test-rr", placement="round_robin")
     node_ids = await _register_workers(broker, 3)
 
-    # Publish a CQI pipeline (3 stages: collect, feature_extract, predict)
     from src.pipeline.patterns import cqi_prediction_pipeline
 
     dag = cqi_prediction_pipeline()
@@ -88,7 +87,6 @@ async def test_static_broker_round_robin_wraps():
     broker = StaticBroker(domain_id="d1", broker_id="test-rr-wrap", placement="round_robin")
     node_ids = await _register_workers(broker, 2)
 
-    # Anomaly detection has 4 stages, 2 workers: expect wrap-around
     from src.pipeline.patterns import anomaly_detection_pipeline
 
     dag = anomaly_detection_pipeline()
@@ -100,15 +98,13 @@ async def test_static_broker_round_robin_wraps():
 
     assigned = [placement[sid] for sid in order]
     # With 2 workers and 4 stages, each worker should get exactly 2 stages
-    from collections import Counter
-
     counts = Counter(assigned)
     assert len(counts) == 2
     assert all(c == 2 for c in counts.values()), f"Expected even distribution, got {counts}"
 
 
 # ---------------------------------------------------------------------------
-# test_static_broker_random
+# StaticBroker: random
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +139,7 @@ async def test_static_broker_random():
 
 
 # ---------------------------------------------------------------------------
-# test_static_broker_no_workers
+# StaticBroker: edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -156,11 +152,6 @@ async def test_static_broker_no_workers():
     dag = cqi_prediction_pipeline()
     with pytest.raises(RuntimeError, match="No workers registered"):
         broker._compute_placement(dag)
-
-
-# ---------------------------------------------------------------------------
-# test_static_broker_single_worker
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -177,3 +168,95 @@ async def test_static_broker_single_worker():
             placement = broker._compute_placement(dag)
 
         assert all(nid == node_ids[0] for nid in placement.values())
+
+
+# ---------------------------------------------------------------------------
+# PlacementStrategy enum
+# ---------------------------------------------------------------------------
+
+
+def test_placement_strategy_values():
+    """PlacementStrategy enum has the expected members."""
+    assert PlacementStrategy.ROUND_ROBIN.value == "round_robin"
+    assert PlacementStrategy.RANDOM.value == "random"
+    assert len(PlacementStrategy) == 2
+
+
+def test_placement_strategy_from_string():
+    """PlacementStrategy can be constructed from string values."""
+    assert PlacementStrategy("round_robin") is PlacementStrategy.ROUND_ROBIN
+    assert PlacementStrategy("random") is PlacementStrategy.RANDOM
+    with pytest.raises(ValueError):
+        PlacementStrategy("invalid")
+
+
+def test_static_broker_accepts_enum():
+    """StaticBroker accepts PlacementStrategy enum directly."""
+    broker = StaticBroker(
+        domain_id="d1",
+        broker_id="test-enum",
+        placement=PlacementStrategy.RANDOM,
+    )
+    assert broker.placement is PlacementStrategy.RANDOM
+
+
+def test_static_broker_accepts_string():
+    """StaticBroker accepts string placement and converts to enum."""
+    broker = StaticBroker(
+        domain_id="d1",
+        broker_id="test-str",
+        placement="round_robin",
+    )
+    assert broker.placement is PlacementStrategy.ROUND_ROBIN
+
+
+# ---------------------------------------------------------------------------
+# KafkaBroker
+# ---------------------------------------------------------------------------
+
+
+def test_kafka_broker_instantiation():
+    """KafkaBroker can be instantiated with default parameters."""
+    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
+    assert broker.domain_id == "d1"
+    assert broker.broker_id == "kafka-test"
+    assert broker.kafka_bootstrap == "kafka:9092"
+    assert broker._producer is None
+
+
+def test_kafka_broker_custom_bootstrap():
+    """KafkaBroker respects custom bootstrap servers."""
+    broker = KafkaBroker(
+        domain_id="d2",
+        broker_id="kafka-d2",
+        kafka_bootstrap="localhost:9093",
+    )
+    assert broker.kafka_bootstrap == "localhost:9093"
+
+
+def test_kafka_broker_placement_returns_sentinel():
+    """KafkaBroker._compute_placement returns 'kafka' for all stages."""
+    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
+
+    from src.pipeline.patterns import cqi_prediction_pipeline
+
+    dag = cqi_prediction_pipeline()
+    placement = broker._compute_placement(dag)
+
+    assert set(placement.keys()) == set(dag.stages.keys())
+    assert all(v == "kafka" for v in placement.values())
+
+
+@pytest.mark.asyncio
+async def test_kafka_broker_placement_all_pipeline_types():
+    """KafkaBroker placement works for all registered pipeline types."""
+    from src.broker.base import _PIPELINE_FACTORIES
+
+    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
+
+    for pipeline_type in _PIPELINE_FACTORIES:
+        dag = _PIPELINE_FACTORIES[pipeline_type]({})
+        placement = broker._compute_placement(dag)
+        assert all(v == "kafka" for v in placement.values()), (
+            f"Pipeline type '{pipeline_type}' has non-kafka placement"
+        )

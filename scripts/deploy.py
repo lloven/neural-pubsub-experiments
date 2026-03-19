@@ -181,7 +181,9 @@ def action_push(cfg: TestbedConfig) -> bool:
         logger.info("Image archive: %.1f MB", tar_size_mb)
 
         ok = True
-        for node in cfg.nodes:
+
+        def _push_to_node(node: NodeConfig) -> tuple[str, bool]:
+            """Push image and compose file to a single node."""
             logger.info("Pushing to %s (%s) ...", node.name, node.host)
             remote_tar = f"/tmp/{cfg.image_name}.tar"
 
@@ -189,23 +191,29 @@ def action_push(cfg: TestbedConfig) -> bool:
             r = _scp_to(node, tar_path, remote_tar)
             if r.returncode != 0:
                 logger.error("SCP to %s failed: %s", node.name, r.stderr.strip())
-                ok = False
-                continue
+                return node.name, False
 
             # Transfer compose file
             r = _scp_to(node, cfg.compose_file, f"/tmp/{os.path.basename(cfg.compose_file)}")
             if r.returncode != 0:
                 logger.error("SCP compose file to %s failed: %s", node.name, r.stderr.strip())
-                ok = False
-                continue
+                return node.name, False
 
             # Load image
             r = _run_ssh(node, f"docker load -i {remote_tar} && rm -f {remote_tar}", timeout=120)
             if r.returncode != 0:
                 logger.error("docker load on %s failed: %s", node.name, r.stderr.strip())
-                ok = False
-            else:
-                logger.info("Image loaded on %s.", node.name)
+                return node.name, False
+
+            logger.info("Image loaded on %s.", node.name)
+            return node.name, True
+
+        with ThreadPoolExecutor(max_workers=len(cfg.nodes)) as pool:
+            futures = {pool.submit(_push_to_node, n): n for n in cfg.nodes}
+            for future in as_completed(futures):
+                name, success = future.result()
+                if not success:
+                    ok = False
 
         return ok
     finally:
