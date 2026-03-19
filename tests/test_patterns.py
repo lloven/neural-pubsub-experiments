@@ -32,14 +32,13 @@ def test_cqi_pipeline_structure():
 
 def test_anomaly_pipeline_structure():
     dag = anomaly_detection_pipeline()
-    assert len(dag) == 4
-    assert len(dag.edges) == 3
+    assert len(dag) == 3
+    assert len(dag.edges) == 2
     assert dag.is_tree() is True
-    # Verify the linear chain
+    # Verify the linear chain matches manuscript: collect -> feature_extract -> detect
     order = dag.topological_sort()
-    assert order.index("ingest") < order.index("preprocess")
-    assert order.index("preprocess") < order.index("detect")
-    assert order.index("detect") < order.index("alert")
+    assert order.index("collect") < order.index("feature_extract")
+    assert order.index("feature_extract") < order.index("detect")
 
 
 # ---------------------------------------------------------------------------

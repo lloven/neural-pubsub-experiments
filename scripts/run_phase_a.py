@@ -40,9 +40,9 @@ RESULTS_DIR = PROJECT_ROOT / "results" / "phase_a"
 
 # Rate presets
 RATES = {
-    "low": 1.0,
+    "low": 2.0,
     "medium": 5.0,
-    "high": 20.0,
+    "high": 10.0,
 }
 
 # Pipeline complexity presets (used to select pipeline mix)

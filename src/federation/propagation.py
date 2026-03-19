@@ -64,6 +64,9 @@ class SummaryPropagator:
         self._peer_failures: dict[str, int] = {}   # peer_url -> consecutive failure count
         self._peer_healthy: dict[str, bool] = {}    # peer_url -> is_healthy
 
+        # Propagation latency tracking (ms per push round)
+        self._propagation_latencies: list[float] = []
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -112,6 +115,7 @@ class SummaryPropagator:
         Args:
             summary: The local domain's current subscription summary.
         """
+        t_start = time.time()
         data = serialize(summary)
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             tasks = [
@@ -119,6 +123,8 @@ class SummaryPropagator:
                 for peer_url in self.peers
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
+        t_end = time.time()
+        self._propagation_latencies.append((t_end - t_start) * 1000.0)
 
     async def receive_summary(self, summary: SubscriptionSummary) -> None:
         """Process an incoming summary from a federation peer.
@@ -150,6 +156,10 @@ class SummaryPropagator:
     def local_summary(self) -> SubscriptionSummary | None:
         """The current local subscription summary, or None if not yet set."""
         return self._local_summary
+
+    def propagation_latencies_ms(self) -> list[float]:
+        """Return the recorded per-round propagation latencies in milliseconds."""
+        return list(self._propagation_latencies)
 
     def update_local_summary(self, summary: SubscriptionSummary) -> None:
         """Set the local summary that will be pushed in the next propagation round.

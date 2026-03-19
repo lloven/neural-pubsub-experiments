@@ -27,7 +27,15 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 VALID_EVENTS = frozenset(
-    {"created", "dispatched", "stage_start", "stage_end", "delivered"}
+    {
+        "created",
+        "dispatched",
+        "placement_complete",
+        "stage_start",
+        "stage_end",
+        "stage_result_received",
+        "delivered",
+    }
 )
 
 
@@ -274,6 +282,8 @@ class AggregateMetrics:
     adaptation_events: int = 0
     adaptation_time_mean_ms: float = 0.0
     domain_crossings_mean: float = 0.0
+    governance_violations: int = 0
+    routing_accuracy_f1: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +313,35 @@ class MetricsCollector:
         self._pipeline_types: dict[str, str] = {}
         self._wall_start: Optional[float] = None
         self._wall_end: Optional[float] = None
+        # Phase 2 additions
+        self._governance_violations: list[dict] = []
+        self._routing_accuracies: list[float] = []
+        self._federation_monitor: Optional["FederationMonitor"] = None
+
+    # ------------------------------------------------------------------
+    # Phase 2: Governance, routing, and federation accessors
+    # ------------------------------------------------------------------
+
+    def set_federation_monitor(self, monitor: "FederationMonitor") -> None:
+        """Attach a FederationMonitor for bandwidth tracking in CSV export."""
+        self._federation_monitor = monitor
+
+    def record_governance_violation(
+        self, pipeline_id: str, stage_id: str, description: str
+    ) -> None:
+        """Record a governance constraint violation for post-hoc analysis."""
+        self._governance_violations.append(
+            {
+                "pipeline_id": pipeline_id,
+                "stage_id": stage_id,
+                "description": description,
+                "timestamp": time.time(),
+            }
+        )
+
+    def record_routing_accuracy(self, pipeline_id: str, f1_score: float) -> None:
+        """Record the F1 routing accuracy for a single pipeline dispatch."""
+        self._routing_accuracies.append(f1_score)
 
     # ------------------------------------------------------------------
     # Recording
@@ -433,6 +472,23 @@ class MetricsCollector:
         crossings = [t.domain_crossings() for t in completed_traces]
         crossings_mean = float(np.mean(crossings)) if crossings else 0.0
 
+        # --- Governance violations ---
+        gov_violations = len(self._governance_violations)
+
+        # --- Routing accuracy (mean F1) ---
+        routing_f1 = (
+            float(np.mean(self._routing_accuracies))
+            if self._routing_accuracies
+            else 0.0
+        )
+
+        # --- Federation bandwidth ---
+        fed_bytes = (
+            self._federation_monitor.total_bytes()
+            if self._federation_monitor is not None
+            else 0
+        )
+
         return AggregateMetrics(
             total_pipelines=total,
             completed=completed,
@@ -444,6 +500,9 @@ class MetricsCollector:
             latency_p99_ms=lat_p99,
             per_stage_latency_mean=per_stage_mean,
             domain_crossings_mean=crossings_mean,
+            governance_violations=gov_violations,
+            routing_accuracy_f1=routing_f1,
+            federation_bandwidth_bytes=fed_bytes,
         )
 
     # ------------------------------------------------------------------
@@ -461,10 +520,14 @@ class MetricsCollector:
         """Write per-pipeline summary metrics to a CSV file.
 
         Each row contains: pipeline_id, pipeline_type, success, error,
-        end_to_end_latency_ms, and one column per unique stage_id latency.
+        end_to_end_latency_ms, aggregate metrics, and one column per
+        unique stage_id latency.
         """
         async with self._lock:
             traces = list(self._traces.values())
+
+        # Compute aggregate once for summary-level columns
+        agg = await self.compute_aggregate()
 
         # Build the union of all stage_ids seen across every trace so that
         # the CSV has a consistent set of columns regardless of which stages
@@ -477,18 +540,32 @@ class MetricsCollector:
             }
         )
 
-        # CSV column layout:
-        #   pipeline_id      -- unique pipeline instance identifier
-        #   pipeline_type    -- logical pipeline template name
-        #   success          -- True/False completion status
-        #   error            -- error message (empty string if successful)
-        #   e2e_latency_ms   -- end-to-end latency (created -> delivered)
-        #   stage_<sid>_ms   -- one column per unique stage_id, holding the
-        #                       compute latency for that stage in this run
-        #                       (empty if the stage was not present)
+        # CSV column layout (expanded for Phase 2)
         fieldnames = (
-            ["pipeline_id", "pipeline_type", "success", "error", "e2e_latency_ms"]
+            [
+                "pipeline_id",
+                "pipeline_type",
+                "success",
+                "error",
+                "e2e_latency_ms",
+                "throughput_pps",
+                "completion_rate",
+                "governance_violations",
+                "federation_bytes_sent",
+                "routing_accuracy_f1",
+            ]
             + [f"stage_{sid}_ms" for sid in all_stage_ids]
+        )
+
+        # Compute completion rate
+        total = agg.total_pipelines
+        completion_rate = agg.completed / total if total > 0 else 0.0
+
+        # Federation bytes
+        fed_bytes = (
+            self._federation_monitor.total_bytes()
+            if self._federation_monitor is not None
+            else 0
         )
 
         with open(path, "w", newline="", encoding="utf-8") as f:
@@ -502,6 +579,15 @@ class MetricsCollector:
                     "success": t.success,
                     "error": t.error or "",
                     "e2e_latency_ms": t.end_to_end_latency_ms() or "",
+                    "throughput_pps": f"{agg.throughput_per_sec:.4f}",
+                    "completion_rate": f"{completion_rate:.4f}",
+                    "governance_violations": len(self._governance_violations),
+                    "federation_bytes_sent": fed_bytes,
+                    "routing_accuracy_f1": (
+                        f"{agg.routing_accuracy_f1:.4f}"
+                        if self._routing_accuracies
+                        else ""
+                    ),
                 }
                 for sid in all_stage_ids:
                     row[f"stage_{sid}_ms"] = stage_lats.get(sid, "")
@@ -618,12 +704,15 @@ class FailureEvent:
         target_id:    Identifier of the failed/recovered resource.
         timestamp:    Wall-clock time of the event.
         is_recovery:  True if this is a recovery event, False if failure.
+        is_detection_complete: True if this marks the end of the detection
+            phase (before re-placement begins).
     """
 
     failure_type: str
     target_id: str
     timestamp: float
     is_recovery: bool = False
+    is_detection_complete: bool = False
 
 
 class AdaptationTracker:
@@ -661,6 +750,28 @@ class AdaptationTracker:
                 target_id=target_id,
                 timestamp=timestamp,
                 is_recovery=False,
+            )
+        )
+
+    def record_detection_complete(
+        self, failure_type: str, target_id: str, timestamp: float
+    ) -> None:
+        """Record the moment failure detection completes (before re-placement).
+
+        This separates the detection phase from the re-placement phase,
+        enabling independent analysis of each.
+
+        Args:
+            failure_type: Must match the failure_type of the paired failure.
+            target_id:    Must match the target_id of the paired failure.
+            timestamp:    Wall-clock time when detection concluded.
+        """
+        self._events.append(
+            FailureEvent(
+                failure_type=failure_type,
+                target_id=target_id,
+                timestamp=timestamp,
+                is_detection_complete=True,
             )
         )
 
@@ -706,6 +817,48 @@ class AdaptationTracker:
                 if pending.get(key):
                     failure_ts = pending[key].pop(0)
                     times.append((event.timestamp - failure_ts) * 1000.0)
+
+        return times
+
+    def detection_times_ms(self) -> list[float]:
+        """Return detection times in ms (failure -> detection_complete) for matched pairs.
+
+        Returns:
+            List of detection durations in milliseconds (may be empty).
+        """
+        sorted_events = sorted(self._events, key=lambda e: e.timestamp)
+        pending: dict[tuple[str, str], list[float]] = {}
+        times: list[float] = []
+
+        for event in sorted_events:
+            key = (event.failure_type, event.target_id)
+            if not event.is_recovery and not event.is_detection_complete:
+                pending.setdefault(key, []).append(event.timestamp)
+            elif event.is_detection_complete:
+                if pending.get(key):
+                    failure_ts = pending[key][0]  # peek, don't pop yet
+                    times.append((event.timestamp - failure_ts) * 1000.0)
+
+        return times
+
+    def replacement_times_ms(self) -> list[float]:
+        """Return re-placement times in ms (detection_complete -> recovery) for matched pairs.
+
+        Returns:
+            List of replacement durations in milliseconds (may be empty).
+        """
+        sorted_events = sorted(self._events, key=lambda e: e.timestamp)
+        pending_detect: dict[tuple[str, str], list[float]] = {}
+        times: list[float] = []
+
+        for event in sorted_events:
+            key = (event.failure_type, event.target_id)
+            if event.is_detection_complete:
+                pending_detect.setdefault(key, []).append(event.timestamp)
+            elif event.is_recovery:
+                if pending_detect.get(key):
+                    detect_ts = pending_detect[key].pop(0)
+                    times.append((event.timestamp - detect_ts) * 1000.0)
 
         return times
 

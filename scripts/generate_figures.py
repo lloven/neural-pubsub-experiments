@@ -183,6 +183,76 @@ def fig_latency_breakdown(df: pd.DataFrame, output: Path):
 
 
 # ---------------------------------------------------------------------------
+# Phase C figures
+# ---------------------------------------------------------------------------
+
+def fig_cross_site_latency(df: pd.DataFrame, output: Path):
+    """Cross-site latency comparison: single-site (C1) vs federated (C2-C4)."""
+    fig, ax = plt.subplots()
+
+    if "e2e_latency_ms" not in df.columns:
+        logger.warning("Skipping cross-site latency plot: missing e2e_latency_ms")
+        return
+
+    configs = sorted(df["config_name"].unique())
+    data = []
+    labels = []
+    for config in configs:
+        latencies = df[df["config_name"] == config]["e2e_latency_ms"].dropna().values
+        if len(latencies) > 0:
+            data.append(latencies)
+            labels.append(config)
+
+    if not data:
+        logger.warning("Skipping cross-site latency plot: no data")
+        return
+
+    ax.boxplot(data, labels=labels)
+    ax.set_xlabel("Configuration")
+    ax.set_ylabel("End-to-End Latency (ms)")
+    ax.set_title("Cross-Site Latency: Single-Site vs Federated")
+    plt.tight_layout()
+    fig.savefig(output, bbox_inches="tight")
+    logger.info("Saved: %s", output)
+    plt.close(fig)
+
+
+def fig_federation_bandwidth(df: pd.DataFrame, output: Path):
+    """Federation bandwidth overhead: summary propagation vs forwarded publications."""
+    fig, ax = plt.subplots()
+
+    bandwidth_col = "federation_bytes_sent"
+    if bandwidth_col not in df.columns:
+        logger.warning("Skipping bandwidth plot: missing %s column", bandwidth_col)
+        return
+
+    configs = sorted(df["config_name"].unique())
+    means = []
+    stds = []
+    for config in configs:
+        subset = df[df["config_name"] == config][bandwidth_col].dropna()
+        if len(subset) > 0:
+            means.append(subset.mean() / 1024)  # Convert to KB
+            stds.append(subset.std() / 1024)
+        else:
+            means.append(0)
+            stds.append(0)
+
+    x = np.arange(len(configs))
+    ax.bar(x, means, yerr=stds, capsize=3,
+           color=[COLOURS.get(c, "#333") for c in configs])
+    ax.set_xlabel("Configuration")
+    ax.set_ylabel("Federation Bandwidth (KB)")
+    ax.set_title("Federation Bandwidth Overhead")
+    ax.set_xticks(x)
+    ax.set_xticklabels(configs)
+    plt.tight_layout()
+    fig.savefig(output, bbox_inches="tight")
+    logger.info("Saved: %s", output)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Phase D figures
 # ---------------------------------------------------------------------------
 
@@ -256,6 +326,10 @@ PHASE_GENERATORS = {
     ],
     "B": [
         ("latency_breakdown.pdf", fig_latency_breakdown),
+    ],
+    "C": [
+        ("cross_site_latency.pdf", fig_cross_site_latency),
+        ("federation_bandwidth.pdf", fig_federation_bandwidth),
     ],
     "D": [
         ("recovery_timeline.pdf", fig_recovery_timeline),

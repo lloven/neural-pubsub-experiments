@@ -183,6 +183,17 @@ class BaseBroker(abc.ABC):
         Records timing metrics, updates pipeline state, and dispatches
         the next ready stages or finalises the pipeline.
         """
+        # Record the moment the broker receives the stage result
+        await self._metrics.record(
+            TimestampRecord(
+                pipeline_id=req.pipeline_id,
+                stage_id=req.stage_id,
+                event="stage_result_received",
+                timestamp=time.time(),
+                node_id=req.node_id,
+            )
+        )
+
         async with self._pipelines_lock:
             ps = self._active_pipelines.get(req.pipeline_id)
             if ps is None:
@@ -262,9 +273,13 @@ class BaseBroker(abc.ABC):
         @app.on_event("startup")
         async def _startup() -> None:
             broker._http_client = httpx.AsyncClient()
+            # Periodic partial CSV export for crash resilience
+            broker._snapshot_task = asyncio.create_task(broker._periodic_snapshot())
 
         @app.on_event("shutdown")
         async def _shutdown() -> None:
+            if hasattr(broker, '_snapshot_task'):
+                broker._snapshot_task.cancel()
             if broker._http_client is not None:
                 await broker._http_client.aclose()
 
@@ -332,6 +347,17 @@ class BaseBroker(abc.ABC):
                 )
             )
 
+            await broker._metrics.record(
+                TimestampRecord(
+                    pipeline_id=pipeline_id,
+                    stage_id="__pipeline__",
+                    event="placement_complete",
+                    timestamp=time.time(),
+                    node_id=broker.broker_id,
+                    metadata={"pipeline_type": req.pipeline_type},
+                )
+            )
+
             await broker._dispatch_ready_stages(ps)
             return PublishResponse(
                 pipeline_id=pipeline_id,
@@ -366,6 +392,24 @@ class BaseBroker(abc.ABC):
             return {"status": "exported", "path": path}
 
         return app
+
+    # ------------------------------------------------------------------
+    # Periodic snapshot for crash resilience
+    # ------------------------------------------------------------------
+
+    async def _periodic_snapshot(self, interval_s: int = 60) -> None:
+        """Write a partial CSV every *interval_s* seconds for crash resilience."""
+        snapshot_path = os.environ.get("RESULT_FILE", "")
+        if not snapshot_path:
+            return
+        partial_path = snapshot_path.replace(".csv", ".partial.csv")
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                os.makedirs(os.path.dirname(partial_path) or ".", exist_ok=True)
+                await self._metrics.export_csv(partial_path)
+            except Exception:
+                pass  # best-effort; don't crash the broker
 
     # ------------------------------------------------------------------
     # Hook for subclasses (called inside _workers_lock)

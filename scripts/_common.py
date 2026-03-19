@@ -21,20 +21,63 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import logging
 import os
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+import random as _random_module
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.local.yaml"
-DEFAULT_SEEDS = [42, 123, 456, 789, 0]
+DEFAULT_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]
+
+
+def shuffle_configs(configs: list, seed: int = 42) -> list:
+    """Deterministically shuffle a list of run configs using *seed*.
+
+    Returns a new list (does not mutate the input). Using a fixed seed
+    ensures reproducibility across machines while eliminating ordering
+    biases (e.g., thermal drift favouring later runs).
+
+    Args:
+        configs: List of run configurations to shuffle.
+        seed: Random seed for deterministic shuffling.
+
+    Returns:
+        A new list with the same elements in shuffled order.
+    """
+    rng = _random_module.Random(seed)
+    shuffled = list(configs)
+    rng.shuffle(shuffled)
+    return shuffled
+
+
+# ---------------------------------------------------------------------------
+# Cool-down between runs
+# ---------------------------------------------------------------------------
+
+
+def cooldown_between_runs(duration_s: int = 60, dry_run: bool = False) -> None:
+    """Wait between experiment runs to allow thermal and OS state to settle.
+
+    Args:
+        duration_s: Cool-down duration in seconds (default 60).
+        dry_run: If True, skip the actual sleep (for testing).
+    """
+    if dry_run:
+        logger.info("[DRY RUN] Would cool down for %ds", duration_s)
+        return
+    logger.info("Cooling down for %ds between runs...", duration_s)
+    time.sleep(duration_s)
+    logger.info("Cool-down complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -310,13 +353,18 @@ def run_single(
         ``[COMPOSE_FILE]`` when None.
     """
     result_file = results_dir / f"{run_id}.csv"
-    project_name = f"npubsub-{run_id}"
+    project_name = f"npubsub-{run_id.lower().replace('_', '-')}"
 
     if dry_run:
         logger.info("  [DRY RUN] Would run for %ds, output to %s", total_duration, result_file)
         return {"run_id": run_id, "status": "dry_run", "result_file": str(result_file)}
 
-    env["RESULT_FILE"] = str(result_file)
+    # Translate host path to container path (./results -> /app/results)
+    try:
+        container_result = Path("/app/results") / result_file.relative_to(PROJECT_ROOT / "results")
+    except ValueError:
+        container_result = result_file
+    env["RESULT_FILE"] = str(container_result)
 
     try:
         compose_up(
@@ -335,6 +383,47 @@ def run_single(
         "status": "completed" if result_file.exists() else "no_output",
         "result_file": str(result_file),
     }
+
+
+# ---------------------------------------------------------------------------
+# Progress tracking and checkpointing
+# ---------------------------------------------------------------------------
+
+def _progress_file(results_dir: Path) -> Path:
+    """Return the path to the progress JSON file (compatible with monitor.sh)."""
+    return results_dir / ".progress.json"
+
+
+def _load_progress(results_dir: Path) -> dict:
+    """Load existing progress, or return empty dict."""
+    pf = _progress_file(results_dir)
+    if pf.exists():
+        try:
+            return json.loads(pf.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_progress(results_dir: Path, progress: dict) -> None:
+    """Atomically write progress JSON."""
+    pf = _progress_file(results_dir)
+    tmp = pf.with_suffix(".tmp")
+    tmp.write_text(json.dumps(progress, indent=2))
+    tmp.rename(pf)
+
+
+def _update_progress(
+    results_dir: Path, progress: dict,
+    run_id: str, status: str, detail: str = "",
+) -> None:
+    """Update a single run's status and persist."""
+    progress[run_id] = {
+        "status": status,
+        "detail": detail,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _save_progress(results_dir, progress)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +476,7 @@ def phase_main(
         help=f"Comma-separated seeds (default: {DEFAULT_SEEDS})",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print runs without executing")
+    parser.add_argument("--resume", action="store_true", help="Skip runs already completed (reads .progress.json)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING"])
 
     if extra_args_fn is not None:
@@ -411,14 +501,46 @@ def phase_main(
     runs = build_matrix_fn(config_names, seeds, **extra_kw)
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load existing progress for checkpointing
+    progress = _load_progress(results_dir) if args.resume else {}
+
     logger.info("%s: %d runs planned", phase_name, len(runs))
     if args.dry_run:
         logger.info("[DRY RUN MODE]")
+    if args.resume:
+        already_done = sum(1 for r in runs if hasattr(r, 'config_name')
+                          and progress.get(getattr(r, 'config_name', ''), {}).get('status') == 'done')
+        logger.info("[RESUME MODE] %d runs already completed, will skip them", already_done)
+
+    # Initialize progress for all runs
+    for run in runs:
+        run_id = getattr(run, 'config_name', None) or str(run)
+        if run_id not in progress:
+            _update_progress(results_dir, progress, run_id, "queued")
 
     results = []
     for i, run in enumerate(runs, 1):
+        run_id = getattr(run, 'config_name', None) or str(run)
+
+        # Checkpoint: skip completed runs on resume
+        if args.resume and progress.get(run_id, {}).get("status") == "done":
+            logger.info("--- Run %d/%d --- SKIP (already completed): %s", i, len(runs), run_id)
+            results.append({"run_id": run_id, "status": "completed", "result_file": "(resumed)"})
+            continue
+
         logger.info("--- Run %d/%d ---", i, len(runs))
-        result = run_fn(run, args.dry_run)
+        _update_progress(results_dir, progress, run_id, "running")
+
+        try:
+            result = run_fn(run, args.dry_run)
+            status = "done" if result["status"] == "completed" else result["status"]
+            _update_progress(results_dir, progress, run_id, status,
+                           detail=result.get("result_file", ""))
+        except Exception as e:
+            logger.error("Run %s failed with exception: %s", run_id, e)
+            result = {"run_id": run_id, "status": "failed", "result_file": str(e)}
+            _update_progress(results_dir, progress, run_id, "failed", detail=str(e))
+
         results.append(result)
 
     completed = sum(1 for r in results if r["status"] == "completed")
