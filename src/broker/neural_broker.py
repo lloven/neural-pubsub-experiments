@@ -20,17 +20,28 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel
 
+from src.broker.base import _build_dag
+from src.broker.models import (
+    HealthResponse,
+    PipelineState,
+    PublishRequest,
+    PublishResponse,
+    RegisterRequest,
+    RegisterResponse,
+    StageResultRequest,
+    WorkerInfo,
+)
 from src.broker.placement import (
     ExecutionUnit,
     GovernancePolicy,
@@ -52,13 +63,6 @@ from src.measurement.harness import (
     TimestampRecord,
 )
 from src.pipeline.dag import PipelineDAG
-from src.pipeline.patterns import (
-    anomaly_detection_pipeline,
-    cqi_prediction_pipeline,
-    funnel_pipeline,
-    map_pipeline,
-    sensor_fusion_pipeline,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -166,161 +170,13 @@ def load_config(path: str) -> BrokerConfig:
     )
 
 
-# ---------------------------------------------------------------------------
-# Internal state dataclasses
-# ---------------------------------------------------------------------------
+# WorkerInfo, PipelineState imported from src.broker.models
 
 
-@dataclass
-class WorkerInfo:
-    """Registration record for a connected worker node.
-
-    Attributes:
-        node_id: Unique identifier (matches ExecutionUnit.node_id).
-        domain_id: Data-sovereignty domain this worker belongs to.
-        slice_id: Network slice this worker is part of.
-        capacity: Maximum processing capacity (normalised, Eq. 1).
-        current_load: Current consumed capacity on this worker.
-        url: HTTP base URL for dispatching stage assignments to this worker.
-    """
-
-    node_id: str
-    domain_id: str
-    slice_id: str
-    capacity: float
-    current_load: float
-    url: str
+# _PIPELINE_FACTORIES and _build_dag imported from src.broker.base
 
 
-@dataclass
-class PipelineState:
-    """Tracks an in-flight pipeline execution.
-
-    Attributes:
-        pipeline_id: Unique identifier for this pipeline instance.
-        pipeline_type: Template name (e.g. "cqi_prediction").
-        dag: The pipeline DAG for this instance.
-        placement: Mapping from stage_id to the node_id it is assigned to.
-        completed_stages: Set of stage_ids that have reported completion.
-        failed: True if any stage has failed and the pipeline is aborted.
-        error: Human-readable failure description if failed is True.
-    """
-
-    pipeline_id: str
-    pipeline_type: str
-    dag: PipelineDAG
-    placement: dict[str, str]
-    completed_stages: set[str] = field(default_factory=set)
-    failed: bool = False
-    error: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Pipeline factory
-# ---------------------------------------------------------------------------
-
-# Maps pipeline_type string to a factory function (or callable).
-# The factory receives a dict of config overrides and returns a PipelineDAG.
-_PIPELINE_FACTORIES: dict[str, Any] = {
-    "cqi_prediction": lambda cfg: cqi_prediction_pipeline(),
-    "anomaly_detection": lambda cfg: anomaly_detection_pipeline(),
-    "sensor_fusion": lambda cfg: sensor_fusion_pipeline(
-        n_sensors=int(cfg.get("n_sensors", 3))
-    ),
-    "map": lambda cfg: map_pipeline(
-        stage_type=cfg.get("stage_type", "transform"),
-        n_stages=int(cfg.get("n_stages", 3)),
-        computational_demand=float(cfg.get("computational_demand", 0.5)),
-        output_data_rate=float(cfg.get("output_data_rate", 5.0)),
-        latency_bound=float(cfg.get("latency_bound", 10.0)),
-        slice_requirement=cfg.get("slice_requirement"),
-    ),
-    "funnel": lambda cfg: funnel_pipeline(
-        n_inputs=int(cfg.get("n_inputs", 3)),
-        input_type=cfg.get("input_type", "ingest"),
-        latency_bound_in=float(cfg.get("latency_bound_in", 10.0)),
-        latency_bound_out=float(cfg.get("latency_bound_out", 5.0)),
-    ),
-}
-
-
-def _build_dag(pipeline_type: str, config: dict) -> PipelineDAG:
-    """Instantiate a PipelineDAG from a registered factory.
-
-    Args:
-        pipeline_type: Key into the factory registry.
-        config: Override dict forwarded to the factory.
-
-    Returns:
-        A fully constructed PipelineDAG.
-
-    Raises:
-        ValueError: If the pipeline_type is not registered.
-    """
-    factory = _PIPELINE_FACTORIES.get(pipeline_type)
-    if factory is None:
-        raise ValueError(
-            f"Unknown pipeline_type '{pipeline_type}'. "
-            f"Registered types: {sorted(_PIPELINE_FACTORIES.keys())}."
-        )
-    return factory(config)
-
-
-# ---------------------------------------------------------------------------
-# Pydantic request / response models
-# ---------------------------------------------------------------------------
-
-
-class PublishRequest(BaseModel):
-    """Body for POST /publish."""
-
-    pipeline_type: str
-    config: dict = {}
-
-
-class PublishResponse(BaseModel):
-    """Response for POST /publish."""
-
-    pipeline_id: str
-    placement: dict[str, str]
-    status: str
-
-
-class RegisterRequest(BaseModel):
-    """Body for POST /register (sent by workers)."""
-
-    node_id: str
-    domain_id: str
-    slice_id: str
-    capacity: float
-    url: str = ""  # Optional; workers may omit if they call from their own URL
-
-
-class RegisterResponse(BaseModel):
-    status: str
-    node_id: str
-
-
-class StageResultRequest(BaseModel):
-    """Body for POST /result (sent by workers after stage completion)."""
-
-    pipeline_id: str
-    stage_id: str
-    node_id: str
-    start_time: float
-    end_time: float
-    processing_time_ms: float
-    output_data: str = ""
-    success: bool = True
-    error: Optional[str] = None
-
-
-class HealthResponse(BaseModel):
-    broker_id: str
-    domain_id: str
-    workers: int
-    active_pipelines: int
-    status: str
+# Pydantic models imported from src.broker.models
 
 
 # ---------------------------------------------------------------------------
@@ -1271,7 +1127,6 @@ class NeuralBroker:
                 self._update_worker_load(req.node_id, -stage.computational_demand)
 
             # Check pipeline completion or advance
-            all_stages = set(ps.dag.stages.keys())
             if ps.failed:
                 await self._metrics.complete_pipeline(
                     req.pipeline_id, success=False, error=ps.error
@@ -1280,7 +1135,7 @@ class NeuralBroker:
                     self._active_pipelines.pop(req.pipeline_id, None)
                 return {"status": "pipeline_failed", "pipeline_id": req.pipeline_id}
 
-            if ps.completed_stages == all_stages:
+            if ps.completed_stages == ps.all_stages:
                 # All stages done: record delivery and finalise
                 await self._metrics.record(
                     TimestampRecord(
@@ -1351,7 +1206,6 @@ class NeuralBroker:
             """
             body = await request.json()
             path = body.get("path", "results/local/metrics.csv")
-            import os
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             await self._metrics.export_csv(path)
             logger.info("Metrics exported to %s", path)
