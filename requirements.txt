@@ -9,6 +9,7 @@ fastapi>=0.100
 uvicorn>=0.20
 httpx>=0.24
 pyyaml>=6.0
+aiokafka>=0.9
 
 # Development / testing only (not needed in Docker image)
 # docker>=6.0

@@ -32,6 +32,8 @@ from scripts._common import (
     run_single,
 )
 
+KAFKA_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.kafka.yaml"
+
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "phase_a"
@@ -144,12 +146,27 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         "WARMUP_S": str(run.warmup_s),
     }
 
+    # A1 (Kafka): use kafka_broker via docker-compose.kafka.yaml overlay
+    # A2 (static): use static_broker with round_robin placement
+    # A3 (random): use static_broker with random placement
+    # A4 (neural): use neural_broker (default)
+    compose_files = None
+    if run.placement_strategy == "kafka":
+        compose_files = [COMPOSE_FILE, KAFKA_COMPOSE_FILE]
+    elif run.placement_strategy == "static":
+        env["BROKER_MODULE"] = "src.broker.static_broker"
+        env["PLACEMENT"] = "round_robin"
+    elif run.placement_strategy == "random":
+        env["BROKER_MODULE"] = "src.broker.static_broker"
+        env["PLACEMENT"] = "random"
+
     return run_single(
         run_id=run_id,
         env=env,
         results_dir=RESULTS_DIR,
         total_duration=total_duration,
         dry_run=dry_run,
+        compose_files=compose_files,
     )
 
 
