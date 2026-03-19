@@ -44,10 +44,14 @@ from scripts._common import (
     phase_main,
     run_single,
 )
+from tests.test_placement_quality import SCENARIO_NAMES
 
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "phase_a5_a6"
+
+# Failure mode constants
+FAILURE_KILL_WORKERS = "kill_2_workers"
 
 # ---------------------------------------------------------------------------
 # Phase A.5: Placement quality micro-benchmark
@@ -98,10 +102,7 @@ def run_phase_a5(dry_run: bool = False) -> Path:
     try:
         from tests.test_placement_quality import _build_scenario, _evaluate
 
-        scenarios = [
-            "homogeneous", "heterogeneous", "funnel",
-            "slice_constrained", "cross_domain",
-        ]
+        scenarios = SCENARIO_NAMES
         rows = []
         for name in scenarios:
             dag, topo, gov, label, ptype = _build_scenario(name)
@@ -151,7 +152,7 @@ CONTENTION_CONFIGS = {
         "arrival_rate": 10.0,
         "n_workers": 5,
         "description": "At capacity, then kill 2 workers at t=5min",
-        "failure": "kill_2_workers",
+        "failure": FAILURE_KILL_WORKERS,
     },
 }
 
@@ -212,7 +213,7 @@ def _run_contention(run: ContentionRunConfig, dry_run: bool) -> dict:
     }
 
     failure_fn = None
-    if run.failure == "kill_2_workers":
+    if run.failure == FAILURE_KILL_WORKERS:
         # Kill 2 workers 5 minutes into the run (after warmup starts)
         def _kill_workers():
             inject_compose_kill(
@@ -240,17 +241,6 @@ def _run_contention(run: ContentionRunConfig, dry_run: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _add_extra_args(parser):
-    parser.add_argument(
-        "--phase", default="all", choices=["all", "a5", "a6"],
-        help="Which sub-phase to run (default: all)",
-    )
-
-
-def _parse_extra(args):
-    return {"phase": args.phase}
-
-
 def main():
     """Run Phase A.5 and/or A.6."""
     import argparse
@@ -275,8 +265,6 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level))
-
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # --- Phase A.5 ---
     if args.phase in ("all", "a5"):

@@ -75,7 +75,11 @@ src/
     routing.py              #   Cross-domain routing protocol (Section 4.2.3)
     integrator.py           #   Composite max-flow capacity (Eq. 8)
   broker/                   # Neural broker = router_core + federation + HTTP API
-    neural_broker.py        #   FastAPI broker server with full pipeline lifecycle
+    models.py               #   Shared Pydantic models + dataclasses (PublishRequest, WorkerInfo, etc.)
+    base.py                 #   BaseBroker ABC: shared endpoints, DAG factory, ready-stage dispatch
+    neural_broker.py        #   Full broker: federation, health monitoring, semantic placement
+    static_broker.py        #   Baseline: round-robin / random placement (PlacementStrategy enum)
+    kafka_broker.py         #   Baseline: Kafka topic-based routing
     placement.py            #   Slice-aware DP/greedy placement (Eq. 10)
   pipeline/                 # Pipeline representation
     dag.py                  #   Service-dependency DAG (stages, demands, data rates)
@@ -94,6 +98,8 @@ tests/
   test_federation.py        # Subscription summary, routing, governance filter
   test_measurement.py       # Trace latency, aggregation, federation monitor
   test_failure.py           # Failure injection (mocked Docker client)
+  test_baselines.py          # Kafka + static broker: instantiation, placement, enum
+  test_placement_quality.py  # Placement micro-benchmark: 5 scenarios, quality gap, constraints
   test_integration.py       # Level 2-3: broker + worker integration (requires Docker)
   test_smoke.py             # Level 4: full phase dry runs
 scripts/
@@ -101,6 +107,7 @@ scripts/
   run_phase_b.py            # Phase B: slice-aware placement
   run_phase_c.py            # Phase C: cross-site federation
   run_phase_d.py            # Phase D: failure and adaptation
+  run_phase_a5_a6.py        # Phase A.5 placement micro-benchmark + A.6 contention
   run_smoke_test.py         # Smoke test runner (all phases, shortened durations)
   generate_figures.py       # Generate all paper figures from result CSVs
   measure_latency.py        # Inter-node latency matrix measurement
@@ -117,6 +124,8 @@ configs/
 | Phase | Purpose                          | Script                      | Key configs                         |
 |-------|----------------------------------|-----------------------------|-------------------------------------|
 | A     | Single-site baselines            | `scripts/run_phase_a.py`    | A1 Kafka, A2 static, A3 random, A4 neural |
+| A.5   | Placement micro-benchmark        | `scripts/run_phase_a5_a6.py`| 5 topology scenarios, quality gap analysis |
+| A.6   | Contention experiment            | `scripts/run_phase_a5_a6.py`| Overload, mixed pipelines, failure injection |
 | B     | Slice-aware placement            | `scripts/run_phase_b.py`    | B1 1-slice, B2 3-slice, B3 +governance, B4 +failure |
 | C     | Cross-site federation            | `scripts/run_phase_c.py`    | C1 Kafka baseline, C2 federated, C3 +governance, C4 +broker failure |
 | D     | Failure and adaptation           | `scripts/run_phase_d.py`    | D1 worker kill, D2 broker kill, D3 partition, D4 funnel failure |
