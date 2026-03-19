@@ -32,11 +32,13 @@ services:
   broker-d1:
     build: .
     command: >
-      -m src.broker.neural_broker
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
       --domain d1
       --broker-id broker-d1
       --port 8080
       --peers http://broker-d2:8080
+    environment:
+      - RESULT_FILE=${RESULT_FILE:-/app/results/metrics.csv}
     networks:
       - slice-URLLC-d1
       - slice-eMBB-d1
@@ -45,6 +47,7 @@ services:
       - "8080:8080"
     volumes:
       - ./results:/app/results
+    cpuset: "${CPUSET_BROKER_D1:-0-1}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 10s
@@ -56,7 +59,7 @@ services:
   broker-d2:
     build: .
     command: >
-      -m src.broker.neural_broker
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
       --domain d2
       --broker-id broker-d2
       --port 8080
@@ -66,6 +69,7 @@ services:
       - federation
     ports:
       - "8082:8080"
+    cpuset: "${CPUSET_BROKER_D2:-2-3}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 10s
@@ -164,7 +168,7 @@ services:
       --arrival-rate ${ARRIVAL_RATE:-5.0}
       --duration ${DURATION_S:-60}
       --seed ${SEED:-42}
-      --result-file /app/results/metrics.csv
+      --result-file ${RESULT_FILE:-/app/results/metrics.csv}
     volumes:
       - ./results:/app/results
     networks:
@@ -184,3 +188,13 @@ networks:
     internal: true
   federation:
     internal: false
+    # WAN emulation: tc netem adds configurable latency to cross-domain traffic.
+    # Override WAN_DELAY_MS (default 10ms) and WAN_JITTER_MS (default 2ms)
+    # to simulate realistic inter-site network conditions.
+    # Applied via entrypoint tc qdisc wrapper in broker containers.
+    driver_opts:
+      com.docker.network.driver.mtu: "1500"
+    labels:
+      - "npubsub.wan.delay=${WAN_DELAY_MS:-10}ms"
+      - "npubsub.wan.jitter=${WAN_JITTER_MS:-2}ms"
+      - "npubsub.wan.tc_netem=true"

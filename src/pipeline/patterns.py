@@ -9,7 +9,7 @@ in the evaluation (Section 6):
   stage followed by a single output stage.
 * **CQI prediction**: 3-stage chain for Channel Quality Indicator prediction
   with data-sovereignty constraints on raw radio measurements.
-* **Anomaly detection**: 4-stage chain for streaming anomaly detection.
+* **Anomaly detection**: 3-stage chain for streaming anomaly detection.
 * **Sensor fusion**: N-sensor funnel into fusion and decision stages.
 """
 
@@ -238,35 +238,33 @@ def cqi_prediction_pipeline() -> PipelineDAG:
 
 
 def anomaly_detection_pipeline() -> PipelineDAG:
-    """Create a 4-stage streaming anomaly detection pipeline.
+    """Create a 3-stage streaming anomaly detection pipeline.
 
     Pipeline topology::
 
-        ingest -> preprocess -> detect -> alert
+        collect -> feature_extract -> detect
 
-    Suitable for monitoring workloads where a continuous data stream is
-    filtered, normalised, passed through an anomaly model, and routed
-    to an alerting service. All stages use the eMBB slice.
+    Mirrors the manuscript's anomaly detection use case (Section 6):
+    a data collection stage feeds feature extraction, which feeds the
+    anomaly detection model. All stages use the eMBB slice.
 
     Returns:
-        A PipelineDAG with 4 stages.
+        A PipelineDAG with 3 stages.
     """
     dag = PipelineDAG()
 
     stages = [
-        Stage("ingest", "ingest", computational_demand=0.1, output_data_rate=20.0, slice_requirement="eMBB"),
-        Stage("preprocess", "preprocess", computational_demand=0.3, output_data_rate=10.0, slice_requirement="eMBB"),
+        Stage("collect", "collect", computational_demand=0.1, output_data_rate=20.0, slice_requirement="eMBB"),
+        Stage("feature_extract", "feature_extract", computational_demand=0.3, output_data_rate=10.0, slice_requirement="eMBB"),
         Stage("detect", "detect", computational_demand=0.8, output_data_rate=1.0, slice_requirement="eMBB"),
-        Stage("alert", "alert", computational_demand=0.1, output_data_rate=0.1, slice_requirement="eMBB"),
     ]
 
     for s in stages:
         dag.add_stage(s)
 
     edges = [
-        Edge("ingest", "preprocess", latency_bound=5.0),
-        Edge("preprocess", "detect", latency_bound=10.0),
-        Edge("detect", "alert", latency_bound=3.0),
+        Edge("collect", "feature_extract", latency_bound=5.0),
+        Edge("feature_extract", "detect", latency_bound=10.0),
     ]
 
     for e in edges:

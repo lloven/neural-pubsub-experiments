@@ -157,10 +157,11 @@ def _parse_args():
     parser.add_argument("--port", type=int, default=8080, help="Listen port.")
     parser.add_argument("--broker-id", default=None, help="Broker ID.")
     parser.add_argument(
-        "--placement", default="round_robin",
+        "--placement", default=os.environ.get("PLACEMENT", "round_robin"),
         choices=[s.value for s in PlacementStrategy],
-        help="Placement strategy (default: round_robin).",
+        help="Placement strategy (default: round_robin, or PLACEMENT env var).",
     )
+    parser.add_argument("--peers", default="", help="Ignored (for compose compatibility with neural_broker).")
     return parser.parse_args()
 
 

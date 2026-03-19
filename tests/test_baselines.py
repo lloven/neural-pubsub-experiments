@@ -87,9 +87,9 @@ async def test_static_broker_round_robin_wraps():
     broker = StaticBroker(domain_id="d1", broker_id="test-rr-wrap", placement="round_robin")
     node_ids = await _register_workers(broker, 2)
 
-    from src.pipeline.patterns import anomaly_detection_pipeline
+    from src.pipeline.patterns import map_pipeline
 
-    dag = anomaly_detection_pipeline()
+    dag = map_pipeline(stage_type="transform", n_stages=4)
     order = dag.topological_sort()
     assert len(order) == 4
 

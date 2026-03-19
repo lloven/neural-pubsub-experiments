@@ -79,6 +79,7 @@ services:
       --broker-url ${BROKER_URL:-http://broker-d1:8080}
       --capacity 1.0
     network_mode: host
+    cap_add: [NET_ADMIN]
     restart: unless-stopped
 
   worker-d1-urllc-2:
