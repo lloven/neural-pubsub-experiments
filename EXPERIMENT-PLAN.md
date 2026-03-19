@@ -197,7 +197,7 @@ Items that must be resolved before travelling. Send Nakao Lab and 5GTNF emails a
 ### Software readiness
 
 - [ ] **Kafka baseline:** Implement Kafka-based static broker for Phase A1/C1 comparison, OR redefine baseline as round-robin HTTP dispatch (document decision)
-- [ ] **Semantic matcher:** Integrate neural-router semantic matching (router.py, embeddings.py) into the broker, OR document that simulated matching is sufficient for the paper's claims
+- [x] **Semantic matcher decision (2026-03-19):** Simulated matching is sufficient. This paper evaluates the distribution architecture (federation, placement, slicing, failure recovery), not matching quality. Pipeline types are explicit in the workload generator. Matching quality is evaluated in the companion Neural Router paper (to be published/arXived before this submission). Document in paper Section 5.2.
 - [ ] **Testbed deployment script:** Create `scripts/deploy.py` for SCP + SSH container deployment to remote nodes
 - [ ] **Testbed compose template:** Create `docker-compose.testbed.yaml` parameterised by `testbed-config.yaml`
 - [ ] **Phase E (EISim):** Pre-build EISim federation extension, OR explicitly mark Phase E as stretch goal / future work
@@ -206,12 +206,11 @@ Items that must be resolved before travelling. Send Nakao Lab and 5GTNF emails a
 ### Connectivity
 
 - [ ] **5GTNF VPN test:** If credentials arrive before departure, test VPN and ping from Oulu
-- [ ] **OpenAI API from Japan:** Verify API access from a Japanese IP (test via VPN or ask a contact)
+- [x] **OpenAI API not needed:** Simulated matching means no external API dependency. Experiment runs fully offline.
 
 ### Logistics
 
 - [ ] **Result backup:** Set up automated SCP of results/ to an external host after each run completion
-- [ ] **Offline fallback:** Pre-download Ollama + Llama 3 8B model in case OpenAI is unreliable from Tokyo
 
 ---
 
@@ -540,8 +539,8 @@ Experiments/neural-pubsub/
 
 | Dependency | Status | Impact |
 |------------|--------|--------|
-| Neural Router single-broker code (`Experiments/neural-router/src/`) | Exists, D1+D2 ablation complete, D3 running | Core routing logic to port |
-| OpenAI API access | Working (tested 2026-03-17) | LLM matching in MatchEvents; fallback: local model |
+| Neural Router single-broker code (`Experiments/neural-router/src/`) | Exists, D1+D2 ablation complete, D3 running | Companion paper; not ported into pubsub (simulated matching used instead) |
+| ~~OpenAI API access~~ | ~~Not needed~~ | ~~Simulated matching; matching quality evaluated in Neural Router paper~~ |
 | 5GTNF remote access (Oulu) | Not yet arranged | Needed for Phase C; fallback: emulated cross-site |
 | EISim codebase | Exists separately | Needed for Phase E only |
 | Docker on testbed | Unknown | Required for deployment; fallback: direct Python if no Docker |
@@ -562,8 +561,8 @@ Experiments/neural-pubsub/
 
 | Risk | Mitigation |
 |------|-----------|
-| No GPU nodes at Nakao Lab | CPU-only embedding (MiniLM); OpenAI API for LLM matching |
-| OpenAI API unreliable from Japan | Local LLM via Ollama (Llama 3 8B) as fallback |
+| No GPU nodes at Nakao Lab | Not needed; experiment uses simulated matching + CPU-only MiniLM embeddings |
+| ~~OpenAI API unreliable from Japan~~ | ~~Resolved: no API needed; simulated matching with known pipeline types~~ |
 | 5GTNF access not arranged in time | Run Phase C on local Docker Compose with calibrated WAN delay |
 | O-RAN stack not available | Use NWDAF as logical framing; pipeline stages are generic containers |
 | Network slicing not configurable | Emulate slices via `tc qdisc` on testbed nodes |
