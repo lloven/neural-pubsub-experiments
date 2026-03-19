@@ -1,0 +1,143 @@
+# =============================================================================
+# Testbed deployment compose file for Neural Pub/Sub.
+#
+# Parameterised version of docker-compose.local.yaml for multi-node
+# deployment.  Key differences from the local emulation:
+#
+#   - Uses pre-built images (no build: context).
+#   - Broker peer URLs and worker broker URLs are environment variables
+#     so they resolve to real node IPs rather than Docker service names.
+#   - Network names are configurable and marked external: true (create
+#     them on each node before starting, or use host networking).
+#   - Results volume path is configurable via RESULTS_DIR.
+#
+# Usage with deploy.py:
+#   1. Build the image locally:  docker build -t neural-pubsub:latest .
+#   2. Push to nodes:            python scripts/deploy.py --config testbed-config.yaml --action push
+#   3. Start all services:       python scripts/deploy.py --config testbed-config.yaml --action start
+#
+# Each node runs only its assigned service(s); deploy.py filters by
+# compose_service name.
+#
+# Environment variables (with defaults):
+#   IMAGE_NAME       (neural-pubsub)        Docker image name
+#   IMAGE_TAG        (latest)               Docker image tag
+#   PEER_BROKER_URL  (http://broker-d2:8080) Peer broker for federation
+#   BROKER_URL       (http://broker-d1:8080) Broker URL for workers
+#   BROKER_D2_URL    (http://broker-d2:8080) Domain 2 broker URL for D2 workers
+#   RESULTS_DIR      (./results)             Host path for result bind-mount
+#   ARRIVAL_RATE     (5.0)                   Workload arrival rate
+#   DURATION_S       (60)                    Workload duration
+#   SEED             (42)                    Random seed
+# =============================================================================
+
+services:
+
+  broker-d1:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.broker.neural_broker
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers ${PEER_BROKER_URL:-http://broker-d2:8080}
+    network_mode: host
+    volumes:
+      - ${RESULTS_DIR:-./results}:/app/results
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  broker-d2:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.broker.neural_broker
+      --domain d2
+      --broker-id broker-d2
+      --port 8080
+      --peers ${PEER_BROKER_URL:-http://broker-d1:8080}
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  worker-d1-urllc-1:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.worker
+      --node-id d1-urllc-1
+      --slice URLLC
+      --domain d1
+      --broker-url ${BROKER_URL:-http://broker-d1:8080}
+      --capacity 1.0
+    network_mode: host
+    restart: unless-stopped
+
+  worker-d1-urllc-2:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.worker
+      --node-id d1-urllc-2
+      --slice URLLC
+      --domain d1
+      --broker-url ${BROKER_URL:-http://broker-d1:8080}
+      --capacity 1.0
+    network_mode: host
+    restart: unless-stopped
+
+  worker-d1-embb-1:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.worker
+      --node-id d1-embb-1
+      --slice eMBB
+      --domain d1
+      --broker-url ${BROKER_URL:-http://broker-d1:8080}
+      --capacity 2.0
+    network_mode: host
+    restart: unless-stopped
+
+  worker-d2-embb-1:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.worker
+      --node-id d2-embb-1
+      --slice eMBB
+      --domain d2
+      --broker-url ${BROKER_D2_URL:-http://broker-d2:8080}
+      --capacity 2.0
+    network_mode: host
+    restart: unless-stopped
+
+  worker-d2-embb-2:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.worker
+      --node-id d2-embb-2
+      --slice eMBB
+      --domain d2
+      --broker-url ${BROKER_D2_URL:-http://broker-d2:8080}
+      --capacity 1.0
+    network_mode: host
+    restart: unless-stopped
+
+  workload:
+    image: ${IMAGE_NAME:-neural-pubsub}:${IMAGE_TAG:-latest}
+    command: >
+      -m src.workload
+      --broker-url ${BROKER_URL:-http://broker-d1:8080}
+      --arrival-rate ${ARRIVAL_RATE:-5.0}
+      --duration ${DURATION_S:-60}
+      --seed ${SEED:-42}
+      --result-file /app/results/metrics.csv
+    volumes:
+      - ${RESULTS_DIR:-./results}:/app/results
+    network_mode: host

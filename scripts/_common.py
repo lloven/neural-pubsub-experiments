@@ -47,6 +47,7 @@ def compose_up(
     env: dict[str, str],
     timeout_s: int,
     failure_fn: Callable[[], None] | None = None,
+    compose_files: list[Path] | None = None,
 ) -> None:
     """Run ``docker compose up`` with optional failure injection thread.
 
@@ -56,19 +57,26 @@ def compose_up(
 
     Args:
         project_name: Docker Compose project name (``-p`` flag).
-        compose_file: Path to the docker-compose YAML file.
+        compose_file: Path to the docker-compose YAML file (used when
+            *compose_files* is None).
         env: Environment variable overrides merged with ``os.environ``.
         timeout_s: Maximum wall-clock seconds before the process is killed.
         failure_fn: Optional zero-argument callable executed in a daemon
             thread.  Should sleep internally before injecting the failure.
+        compose_files: Optional list of compose file paths (base + overlays).
+            When provided, overrides *compose_file*.
 
     Returns:
         None.  Failures are logged; cleanup is left to the caller via
         :func:`compose_down`.
     """
     compose_env = {**os.environ, **env}
+    files = compose_files or [compose_file]
+    file_args = []
+    for f in files:
+        file_args.extend(["-f", str(f)])
     cmd = [
-        "docker", "compose", "-f", str(compose_file),
+        "docker", "compose", *file_args,
         "-p", project_name,
         "up", "--build", "--abort-on-container-exit",
         "--timeout", "30",
@@ -100,6 +108,7 @@ def compose_down(
     project_name: str,
     compose_file: Path,
     env: dict[str, str],
+    compose_files: list[Path] | None = None,
 ) -> None:
     """Run ``docker compose down`` to clean up a project.
 
@@ -109,13 +118,19 @@ def compose_down(
 
     Args:
         project_name: Docker Compose project name.
-        compose_file: Path to the docker-compose YAML file.
+        compose_file: Path to the docker-compose YAML file (used when
+            *compose_files* is None).
         env: Environment variable overrides (same dict passed to compose_up).
+        compose_files: Optional list of compose file paths (base + overlays).
     """
     compose_env = {**os.environ, **env}
+    files = compose_files or [compose_file]
+    file_args = []
+    for f in files:
+        file_args.extend(["-f", str(f)])
     subprocess.run(
         [
-            "docker", "compose", "-f", str(compose_file),
+            "docker", "compose", *file_args,
             "-p", project_name,
             "down", "--volumes", "--remove-orphans",
         ],
@@ -272,6 +287,7 @@ def run_single(
     total_duration: int,
     dry_run: bool = False,
     failure_fn: Callable[[], None] | None = None,
+    compose_files: list[Path] | None = None,
 ) -> dict[str, str]:
     """Execute one experiment run via Docker Compose and return a result dict.
 
@@ -289,6 +305,9 @@ def run_single(
         If True, skip execution and return a placeholder result.
     failure_fn:
         Optional zero-argument callable for failure injection (run in a thread).
+    compose_files:
+        Optional list of compose file paths (base + overlays). Defaults to
+        ``[COMPOSE_FILE]`` when None.
     """
     result_file = results_dir / f"{run_id}.csv"
     project_name = f"npubsub-{run_id}"
@@ -306,9 +325,10 @@ def run_single(
             env=env,
             timeout_s=total_duration + 120,
             failure_fn=failure_fn,
+            compose_files=compose_files,
         )
     finally:
-        compose_down(project_name, COMPOSE_FILE, env)
+        compose_down(project_name, COMPOSE_FILE, env, compose_files=compose_files)
 
     return {
         "run_id": run_id,

@@ -1,0 +1,75 @@
+# =============================================================================
+# Testbed deployment configuration for Neural Pub/Sub.
+#
+# Used by: scripts/deploy.py
+# Topology: mirrors docker-compose.local.yaml across physical nodes.
+#
+# Each entry under 'nodes' maps a logical service name to the SSH-
+# accessible machine that will run it.  A single physical machine
+# may host several services (just repeat the host/ssh_user/ssh_key
+# with different compose_service values).
+# =============================================================================
+
+# --- Node definitions --------------------------------------------------------
+# Replace placeholder IPs with actual testbed addresses.
+nodes:
+
+  broker-d1:
+    host: 192.168.1.10          # Domain 1 broker node
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: broker-d1
+
+  broker-d2:
+    host: 192.168.1.20          # Domain 2 broker node
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: broker-d2
+
+  worker-d1-urllc-1:
+    host: 192.168.1.11          # Domain 1, URLLC worker 1
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: worker-d1-urllc-1
+
+  worker-d1-urllc-2:
+    host: 192.168.1.12          # Domain 1, URLLC worker 2
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: worker-d1-urllc-2
+
+  worker-d1-embb-1:
+    host: 192.168.1.13          # Domain 1, eMBB worker
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: worker-d1-embb-1
+
+  worker-d2-embb-1:
+    host: 192.168.1.21          # Domain 2, eMBB worker 1
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: worker-d2-embb-1
+
+  worker-d2-embb-2:
+    host: 192.168.1.22          # Domain 2, eMBB worker 2
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: worker-d2-embb-2
+
+  workload:
+    host: 192.168.1.10          # Co-located with broker-d1 (or separate)
+    ssh_user: guest
+    ssh_key: ~/.ssh/id_ed25519
+    compose_service: workload
+
+# --- Image transfer ----------------------------------------------------------
+image_name: neural-pubsub       # docker image name (no registry prefix)
+image_tag: latest               # tag to save/load
+
+# --- Compose files -----------------------------------------------------------
+compose_file: docker-compose.testbed.yaml  # testbed-specific compose
+
+# --- Results -----------------------------------------------------------------
+results_dir: /tmp/neural-pubsub/results    # bind-mount path on each node
+backup_host: your-backup-server.example.com
+backup_path: /data/neural-pubsub/results

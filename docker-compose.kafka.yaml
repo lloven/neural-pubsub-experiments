@@ -1,0 +1,56 @@
+# =============================================================================
+# Kafka overlay for Phase A baseline (A1 config).
+#
+# Adds a single-node Kafka broker (KRaft mode, no Zookeeper) and overrides
+# broker-d1 to use kafka_broker instead of neural_broker.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml -f docker-compose.kafka.yaml up --build
+# =============================================================================
+
+services:
+
+  kafka:
+    image: bitnami/kafka:latest
+    environment:
+      # KRaft mode (no Zookeeper)
+      KAFKA_CFG_NODE_ID: "0"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka:9093"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      # Listeners
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      # Single-node defaults
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      # Auto-create topics for pipeline types
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - federation
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # Override broker-d1 to use kafka_broker
+  broker-d1:
+    command: >
+      -m src.broker.kafka_broker
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --kafka-bootstrap kafka:9092
+    environment:
+      DOMAIN: d1
+      BROKER_ID: broker-d1
+      KAFKA_BOOTSTRAP: "kafka:9092"
+    depends_on:
+      kafka:
+        condition: service_healthy

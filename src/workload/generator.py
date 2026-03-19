@@ -223,6 +223,8 @@ class WorkloadGenerator:
         self._run_start = time.time()
         deadline = self._run_start + self.config.duration_s
         mean_inter_arrival = 1.0 / self.config.arrival_rate
+        heartbeat_interval = 60.0  # seconds between progress reports
+        next_heartbeat = self._run_start + heartbeat_interval
 
         logger.info(
             "Workload generator starting: rate=%.2f req/s, duration=%.1f s, "
@@ -238,6 +240,20 @@ class WorkloadGenerator:
                 remaining = deadline - now
                 if remaining <= 0:
                     break
+
+                # Periodic progress heartbeat
+                if now >= next_heartbeat:
+                    elapsed = now - self._run_start
+                    actual_rate = self._total_generated / elapsed if elapsed > 0 else 0.0
+                    logger.info(
+                        "HEARTBEAT  elapsed=%.0fs  sent=%d  rate=%.2f req/s  "
+                        "remaining=%.0fs",
+                        elapsed,
+                        self._total_generated,
+                        actual_rate,
+                        remaining,
+                    )
+                    next_heartbeat = now + heartbeat_interval
 
                 # Poisson inter-arrival time
                 inter_arrival = float(
