@@ -190,22 +190,73 @@ Implements Section 4.2 (Broker Federation):
 
 ---
 
+## Pre-Departure Checklist
+
+Items that must be resolved before travelling. Send Nakao Lab and 5GTNF emails as early as possible.
+
+### Software readiness
+
+- [ ] **Kafka baseline:** Implement Kafka-based static broker for Phase A1/C1 comparison, OR redefine baseline as round-robin HTTP dispatch (document decision)
+- [ ] **Semantic matcher:** Integrate neural-router semantic matching (router.py, embeddings.py) into the broker, OR document that simulated matching is sufficient for the paper's claims
+- [ ] **Testbed deployment script:** Create `scripts/deploy.py` for SCP + SSH container deployment to remote nodes
+- [ ] **Testbed compose template:** Create `docker-compose.testbed.yaml` parameterised by `testbed-config.yaml`
+- [ ] **Phase E (EISim):** Pre-build EISim federation extension, OR explicitly mark Phase E as stretch goal / future work
+- [ ] **Runtime estimate:** Calculate actual Phase A runtime (4 configs x 9 combos x 5 runs x 40 min = 120h). Plan parallel execution or reduce matrix
+
+### Connectivity
+
+- [ ] **5GTNF VPN test:** If credentials arrive before departure, test VPN and ping from Oulu
+- [ ] **OpenAI API from Japan:** Verify API access from a Japanese IP (test via VPN or ask a contact)
+
+### Logistics
+
+- [ ] **Result backup:** Set up automated SCP of results/ to an external host after each run completion
+- [ ] **Offline fallback:** Pre-download Ollama + Llama 3 8B model in case OpenAI is unreliable from Tokyo
+
+---
+
 ## Testbed Deployment (Week 2-3)
 
-### 1.1 Nakao Lab testbed inventory (day 1, parallel with Phase 0)
+### 1.0 Pre-visit questions for Nakao Lab (send by email before arrival)
 
-Obtain and document:
+These questions should be sent to the Nakao Lab contact person before the visit so they can prepare access, allocations, and documentation. Items marked (on-site) can only be resolved in person.
 
-- [ ] **Compute nodes:** How many, what specs (CPU/GPU, RAM, storage), which are available for guest use
-- [ ] **Network slicing:** What slices are configured, can custom slices be provisioned, QoS profiles
-- [ ] **O-RAN stack:** Is near-RT RIC / non-RT RIC running? What xApps are deployed?
-- [ ] **Container runtime:** Kubernetes, Docker, Podman? Can arbitrary containers be deployed?
-- [ ] **Inter-node latency matrix:** Measure RTT between all available nodes
-- [ ] **Access model:** SSH, VPN, web console? Remote access after the visit?
-- [ ] **Technical contact:** Name/email of day-to-day testbed manager
-- [ ] **Resource quotas:** Node-hours, GPU-hours, booking system
-- [ ] **Data export policy:** Can logs leave the lab freely?
-- [ ] **Container registry:** Can we push Docker images to a local registry, or must we build on each node?
+#### Compute and deployment
+- [ ] **Compute nodes:** How many nodes are available for guest experiments? What specs (CPU cores, RAM, storage, GPU if any)?
+- [ ] **Container runtime:** Is Docker, Kubernetes, or Podman available? Can we deploy arbitrary containers? Any security restrictions (e.g., rootless only, no host networking)?
+- [ ] **Container registry:** Is there a local registry we can push to, or should we `docker save`/`docker load` via SCP?
+- [ ] **OS and architecture:** What OS do the nodes run (Ubuntu, CentOS, etc.)? x86_64 or ARM?
+- [ ] **Resource quotas:** Is there a booking system? Can we reserve nodes for 2-3 weeks of dedicated use?
+- [ ] **Internet access from nodes:** Can containers on testbed nodes reach the public internet (needed for OpenAI API calls)? If not, is there a proxy?
+
+#### Network and slicing
+- [ ] **Network slicing:** Does Local6G support configurable network slices? What slice types are pre-configured (eMBB, URLLC, mMTC)? Can we create custom slices with specific QoS profiles?
+- [ ] **O-RAN stack:** Is a near-RT RIC or non-RT RIC deployed? What xApps are available? Can we deploy custom xApps?
+- [ ] **Network topology:** How are the nodes connected? Is there a switch topology diagram? Are there multiple network segments we can use as slice proxies?
+- [ ] **Traffic shaping:** If native slicing is not available, can we use `tc qdisc` on nodes to emulate slice QoS?
+
+#### Access and logistics
+- [ ] **Access model:** SSH keys, VPN, or web console? Can we get credentials before arrival to test connectivity?
+- [ ] **Remote access after visit:** Can we SSH into the testbed from outside Japan after the visit (for follow-up experiments or debugging)?
+- [ ] **Technical contact:** Name and email of the day-to-day testbed manager we should coordinate with
+- [ ] **Lab hours and access:** Any restrictions on physical lab access (badge, hours, weekends)?
+- [ ] **WiFi/network for laptop:** Is there guest WiFi or should we connect via ethernet?
+
+#### Data and institutional
+- [ ] **Data export:** Can experiment logs and CSV results leave the lab freely? Any restrictions on data that transits the testbed?
+- [ ] **Acknowledgments:** How should the Local6G testbed be acknowledged in the paper?
+- [ ] **Institutional framing:** Which project umbrella for this work? Options: 6GBridge Local6G (Business Finland), MIRAI-HARMONY (NICT), Nakao's UOulu guest professorship
+
+### 1.1 Nakao Lab testbed inventory (day 1, on-site)
+
+Verify and extend the pre-visit information. Measure what can only be measured on-site:
+
+- [ ] **Inter-node latency matrix:** Measure RTT between all available nodes (use `scripts/measure_latency.py`)
+- [ ] **Actual container performance:** Deploy one broker + one worker, measure stage processing time on real hardware
+- [ ] **Network bandwidth:** Measure sustained throughput between nodes (`iperf3`)
+- [ ] **Slice QoS verification:** If slices are available, measure actual latency/bandwidth per slice
+- [ ] **Confirm deployment path:** Successfully deploy and run the Docker smoke test on testbed nodes
+- [ ] **Calibrate params:** Update `configs/` with actual measured values (latencies, capacities)
 
 ### 1.2 Cross-site link assessment (day 2)
 
@@ -247,6 +298,8 @@ All on Nakao Lab Local6G, single domain, no federation.
 - 5 runs x 3 workload rates (low/medium/high) x 3 pipeline complexities (2/3/5 stages)
 - Each run: 10-minute warm-up, 30-minute measurement window
 - Record: e2e latency (p50/p95/p99), throughput, routing accuracy (F1 vs ground-truth matching)
+
+**Runtime estimate:** 4 configs x 9 combos x 5 runs x 40 min = 120 hours sequential. With 4 parallel nodes: ~30 hours. **If this exceeds the 2-day allocation, reduce to 3 seeds and 2 rates (low/high) = 48h sequential, ~12h parallel.**
 
 Expected outputs:
 - [ ] `results/phase_a/` with CSV per run
@@ -496,6 +549,12 @@ Experiments/neural-pubsub/
 | Peer broker health | **Implemented** (2026-03-18) | Failure counting, cached summary fallback |
 | Metrics CSV export | **Implemented** (2026-03-18) | Broker /metrics/export endpoint, workload auto-export |
 | Phase B/C/D run scripts | **Created** (2026-03-18) | All 4 phase scripts dry-run validated |
+| Kafka baseline broker | **Not started** | Needed for Phase A1/C1; fallback: redefine as round-robin HTTP |
+| Testbed deployment script | **Not started** | Needed for testbed deployment; can use manual SCP+SSH as fallback |
+| docker-compose.testbed.yaml | **Not started** | Template for real testbed; parameterised by testbed-config.yaml |
+| Code documentation | **Complete** (2026-03-19) | README, inline docs, config comments, test docstrings |
+| Code simplification | **Complete** (2026-03-19) | /simplify pass: O(1) lookups, shared phase scripts, HTTP client reuse |
+| Docker smoke test | **Passed** (2026-03-18) | 63 pipelines, 2 domains, 5 workers, clean CSV output |
 
 ---
 
@@ -511,6 +570,10 @@ Experiments/neural-pubsub/
 | Insufficient testbed nodes | Minimum viable: 4 nodes (2 per domain). EISim compensates (Phase E) |
 | No Docker on testbed | Run processes directly via SSH + virtualenv; Docker Compose for local only |
 | Container registry not available | `docker save` / `docker load` via SCP |
+| Data loss (node crash, Docker prune) | Automated SCP of results/ to backup host after each run; git push results to private repo |
+| Silent worker hang during long runs | Workload generator logs pipeline completion count every 60s; health check detects unresponsive workers |
+| Phase A runtime exceeds allocation | Reduce to 3 seeds x 2 rates = 24 configs per phase (12h parallel on 4 nodes) |
+| Phase E (EISim) not ready in time | Mark as future work; core paper claims (1-6) are covered by Phases A-D |
 
 ---
 
