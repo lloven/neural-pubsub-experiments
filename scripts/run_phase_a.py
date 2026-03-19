@@ -73,6 +73,10 @@ class RunConfig:
     measurement_s: int = 1800
     placement_strategy: str = "neural"
 
+    @property
+    def run_id(self) -> str:
+        return f"{self.config_name}_rate-{self.rate_label}_stages-{self.pipeline_complexity}_seed-{self.seed}"
+
 
 def _add_extra_args(parser):
     parser.add_argument(
