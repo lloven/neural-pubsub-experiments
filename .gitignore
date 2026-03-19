@@ -12,3 +12,6 @@ results/
 *.csv
 .env
 .DS_Store
+
+# Internal planning docs (not for public repo)
+EXPERIMENT-PLAN.md
