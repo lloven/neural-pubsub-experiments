@@ -508,19 +508,22 @@ def phase_main(
     if args.dry_run:
         logger.info("[DRY RUN MODE]")
     if args.resume:
-        already_done = sum(1 for r in runs if hasattr(r, 'config_name')
-                          and progress.get(getattr(r, 'config_name', ''), {}).get('status') == 'done')
+        already_done = sum(1 for r in runs
+                          if progress.get(
+                              getattr(r, 'run_id', None) or getattr(r, 'config_name', ''), {}
+                          ).get('status') == 'done')
         logger.info("[RESUME MODE] %d runs already completed, will skip them", already_done)
 
     # Initialize progress for all runs
     for run in runs:
-        run_id = getattr(run, 'config_name', None) or str(run)
+        run_id = getattr(run, 'run_id', None) or getattr(run, 'config_name', None) or str(run)
         if run_id not in progress:
             _update_progress(results_dir, progress, run_id, "queued")
 
     results = []
     for i, run in enumerate(runs, 1):
-        run_id = getattr(run, 'config_name', None) or str(run)
+        # Use run_id property if available (includes seed/rate), else config_name, else str
+        run_id = getattr(run, 'run_id', None) or getattr(run, 'config_name', None) or str(run)
 
         # Checkpoint: skip completed runs on resume
         if args.resume and progress.get(run_id, {}).get("status") == "done":
