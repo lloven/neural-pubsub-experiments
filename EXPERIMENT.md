@@ -64,7 +64,7 @@ The experiment answers three questions about distributing AI inference pipelines
 | Variable | Value | Rationale |
 |----------|-------|-----------|
 | Measurement window | 30 minutes (after 10-minute warm-up) | Steady-state measurement |
-| Seeds per configuration | 5 (reduces to 3 if runtime budget exceeded) | Statistical significance |
+| Seeds per configuration | 5 for Phases A-C (reduces to 3 if runtime budget exceeded); 10 for Phase D | Statistical significance |
 | Pipeline types | CQI prediction (3-stage map-map-map, URLLC), anomaly detection (3-stage map-map-map, eMBB), sensor fusion (5-stage funnel: 3 inputs + fusion + report, multi-slice) | Representative 6G RAN use cases |
 | Embedding model | all-MiniLM-L6-v2 (pre-downloaded, CPU-only, deterministic) | Reproducibility |
 | Semantic matching | Simulated (deterministic template matching, not LLM-based) | Isolates distribution architecture; matching quality evaluated in companion Neural Router paper |
@@ -94,6 +94,34 @@ The experiment answers three questions about distributing AI inference pipelines
 - Throughput vs. arrival rate (A1-A4 overlaid)
 - Latency decomposition (routing + transfer + compute) stacked bar chart
 - Routing accuracy table (A4 vs. companion Neural Router paper results)
+
+### Phase A.5: Placement algorithm quality (micro-benchmark)
+
+**Purpose:** Validate that the placement algorithm (Eq. 9) produces near-optimal placements. This isolates placement quality from system-level factors.
+
+**Method:** For small topologies (3-5 workers, 3-5 stages), brute-force all feasible placements and compare algorithm output against the true minimum cost. Reports the optimality gap (algorithm_cost / optimal_cost - 1).
+
+**Topologies tested:** Homogeneous flat, heterogeneous flat, slice-constrained (2 slices), cross-domain with governance.
+
+**Runtime:** < 1 minute (pure computation, no Docker).
+
+### Phase A.6: Resource contention
+
+**Purpose:** Validate graceful degradation under overload. Tests whether the system handles arrival rates exceeding aggregate capacity without catastrophic failure (starvation, deadlock, unbounded queue growth).
+
+**Matrix:** 3 configs x 5 seeds = 15 runs. Per run: 10-min warmup + 15-min measurement = 25 min. Total: ~6h.
+
+| Config | Arrival rate | Workers | Expected behaviour |
+|--------|-------------|---------|-------------------|
+| A6.1 | 20/s (2x capacity) | 5 | Queue buildup, graceful degradation |
+| A6.2 | 50/s (5x capacity) | 5 | Saturation, measure failure rate |
+| A6.3 | 10/s (at capacity) | 5, then kill 2 at t=5min | Dynamic contention from worker loss |
+
+**Expected outputs:**
+- Pipeline completion rate vs. arrival rate (at and above capacity)
+- Queue depth over time
+- Per-pipeline-type fairness under contention
+- Latency degradation curve
 
 ### Phase B: Slice-aware placement
 
@@ -150,7 +178,7 @@ The experiment answers three questions about distributing AI inference pipelines
 | D3 | Network partition (`docker network disconnect`) | t=15min | Federation link down; both brokers fall back to local-only routing using cached summaries |
 | D4 | Partial sensor loss (scale down sensor workers) | t=15min | Funnel pipeline stages with missing inputs: configurable wait/proceed/abort policy |
 
-**Matrix:** 4 configs x 5 seeds = 20 runs.
+**Matrix:** 4 configs x 10 seeds = 40 runs.
 
 **Expected outputs:**
 - Recovery timeline plots per failure type (time to detect, time to re-route, pipeline success rate)
@@ -262,10 +290,13 @@ Results are exported as CSV via the broker's `/metrics/export` endpoint or by th
 
 ### Statistical approach
 
-- Each configuration runs with 5 independent random seeds (workload arrival process and pipeline type selection are seeded)
-- Metrics are reported as median with interquartile range across seeds
-- Latency CDFs use all pipeline instances from all seeds (thousands of data points per configuration)
-- Phase D recovery times are reported per-event (5 events per configuration, one per seed)
+- Each configuration runs with 5 independent random seeds (Phase D uses 10 seeds for greater statistical power on recovery-time analysis)
+- **Reporting:** Latency reported as median with interquartile range (IQR) across seeds. CDFs constructed from all pipeline instances pooled across seeds (>1000 data points per configuration)
+- **Hypothesis tests:** Seed-level aggregate statistics are the unit of analysis (n=5 or n=10), ensuring independence. Pairwise distribution comparisons use the two-sample Kolmogorov-Smirnov (KS) test with Holm-Bonferroni correction for the three planned contrasts per metric (S4 vs. S1, S4 vs. S2, S4 vs. S3). Exact p-values reported
+- **Effect sizes:** Vargha-Delaney A_12 statistic for all pairwise comparisons (A_12 = 0.5 = no effect; A_12 >= 0.71 = large effect). Wasserstein distance (earth-mover distance, in ms) as an interpretable measure of CDF separation
+- **Confidence intervals:** Bootstrap 95% CIs (10,000 resamples) for median and p95 latency, computed from pooled pipeline instances
+- **Phase D recovery times:** Per-event (one failure per seed). With n=10, use one-sample Wilcoxon signed-rank test against the 2x summary_interval threshold
+- **Multiple comparison correction:** Holm-Bonferroni for planned contrasts. When comparing all 4 strategies (6 pairwise tests), apply Holm-Bonferroni across all 6. When comparing S4 against each baseline (3 contrasts), apply across 3 only
 
 ### Run ordering
 
@@ -294,7 +325,7 @@ The experiment must produce data sufficient to evaluate all six hypotheses:
 | Slice-aware placement reduces latency (H3) | Phase B | B2 p95 < B1 p95 with p < 0.05 |
 | Governance overhead is bounded (H4) | Phase B, C | Report B3/B2 and C3/C2 latency ratios with confidence intervals |
 | Federation scales linearly (H5) | Phase C, E | If Phase E completed: summary bandwidth proportional to domain count under hierarchical topology. If not: report 2-domain overhead and state scaling as conjecture |
-| Recovery within bounded time (H6) | Phase D | Report detection time and re-placement time separately. Both < 2 x summary_interval_s for D1-D4 |
+| Recovery within bounded time (H6) | Phase D | Report detection time and re-placement time separately (10 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D4 |
 
 ## 10. Reproducibility
 
