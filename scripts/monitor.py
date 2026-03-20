@@ -169,6 +169,10 @@ def render(results_dir: Path, progress: dict):
         avg_time_per_run = elapsed / n_done
         remaining_runs = n_queued + n_running
         eta = avg_time_per_run * remaining_runs
+    elif n_running > 0 or n_queued > 0:
+        # Fallback: assume 2400s per run (serial execution)
+        remaining_runs = n_queued + n_running
+        eta = remaining_runs * 2400
     else:
         eta = -1
 
@@ -204,10 +208,23 @@ def render(results_dir: Path, progress: dict):
             total_c = len(run_containers)
 
             pipe_str = f"{pipe_count} pipelines" if pipe_count > 0 else "starting..."
-            container_str = f"{healthy}/{total_c} healthy" if total_c > 0 else "no containers"
+            if total_c > 0:
+                container_str = f"{total_c} up" + (f", {healthy} health-OK" if healthy > 0 else "")
+            else:
+                container_str = "no containers"
+
+            # Time-based progress bar (each run = 2400s total)
+            run_duration = 2400  # warmup + measurement
+            pct = min(run_elapsed / run_duration, 1.0) if run_elapsed > 0 else 0.0
+            bar_len = 20
+            filled = int(bar_len * pct)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            eta_run = max(0, run_duration - run_elapsed)
+            warmup_indicator = " (warmup)" if run_elapsed < 600 else ""
 
             print(f"    {run_id}")
-            print(f"      Elapsed: {format_time(run_elapsed)}  |  {pipe_str}  |  {container_str}")
+            print(f"      [{bar}] {pct*100:4.1f}%  {format_time(run_elapsed)}/{format_time(run_duration)}{warmup_indicator}")
+            print(f"      {pipe_str}  |  {container_str}  |  ETA: {format_time(eta_run)}")
         print()
 
     # Completed runs (compact)
@@ -234,9 +251,18 @@ def render(results_dir: Path, progress: dict):
             print(f"    {run_id}: {detail}")
         print()
 
-    # Queued
+    # Queued (compact summary by config×rate)
     if runs_queued:
-        print(f"  \u23F3 Queued: {', '.join(r[0] for r in runs_queued)}")
+        from collections import Counter
+        buckets = Counter()
+        for run_id, _ in runs_queued:
+            # Parse "A1_rate-low_stages-3_seed-42" → "A1 low"
+            parts = run_id.split("_")
+            config = parts[0] if parts else "?"
+            rate = parts[1].replace("rate-", "") if len(parts) > 1 else "?"
+            buckets[f"{config}/{rate}"] += 1
+        summary = ", ".join(f"{k}×{v}" for k, v in sorted(buckets.items()))
+        print(f"  ⏳ Queued ({len(runs_queued)}): {summary}")
         print()
 
     # Docker containers
@@ -247,12 +273,20 @@ def render(results_dir: Path, progress: dict):
             brokers = [c for c in npubsub_containers if "broker" in c["name"]]
             workers = [c for c in npubsub_containers if "worker" in c["name"]]
             workload = [c for c in npubsub_containers if "workload" in c["name"]]
+            kafka = [c for c in npubsub_containers if "kafka" in c["name"]]
+            other = [c for c in npubsub_containers
+                     if c not in brokers and c not in workers and c not in workload and c not in kafka]
             if brokers:
                 print(f"    Brokers:  {len(brokers)} ({sum(1 for b in brokers if 'healthy' in b['status'].lower())} healthy)")
             if workers:
                 print(f"    Workers:  {len(workers)}")
+            if kafka:
+                healthy = sum(1 for k in kafka if "healthy" in k["status"].lower())
+                print(f"    Kafka:    {len(kafka)} ({healthy} healthy)")
             if workload:
                 print(f"    Workload: {len(workload)}")
+            if other:
+                print(f"    Other:    {len(other)}")
     else:
         print("  Docker: no containers running")
 
