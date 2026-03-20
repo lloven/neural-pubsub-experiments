@@ -16,3 +16,6 @@ results/
 # Internal planning docs (not for public repo)
 EXPERIMENT-PLAN.md
 REFACTOR-PLAN.md
+
+# Internal reference docs (not for public repo)
+docs/
