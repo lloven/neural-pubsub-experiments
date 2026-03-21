@@ -108,10 +108,16 @@ def test_can_record_stage_result_received_timestamp():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_d_default_seeds_count_is_10():
-    """run_phase_d.py must use 10 seeds by default."""
+def test_phase_d_extended_seeds_count_is_10():
+    """Phase D uses 10 seeds for statistical power on recovery-time analysis."""
+    from scripts._common import EXTENDED_SEEDS
+    assert len(EXTENDED_SEEDS) == 10, f"Expected 10 seeds, got {len(EXTENDED_SEEDS)}"
+
+
+def test_default_seeds_count_is_5():
+    """Most phases use 5 seeds."""
     from scripts._common import DEFAULT_SEEDS
-    assert len(DEFAULT_SEEDS) == 10, f"Expected 10 seeds, got {len(DEFAULT_SEEDS)}"
+    assert len(DEFAULT_SEEDS) == 5, f"Expected 5 seeds, got {len(DEFAULT_SEEDS)}"
 
 
 # ---------------------------------------------------------------------------
