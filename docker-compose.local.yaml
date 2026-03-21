@@ -30,6 +30,7 @@
 services:
 
   broker-d1:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m ${BROKER_MODULE:-src.broker.neural_broker}
@@ -57,6 +58,7 @@ services:
     restart: unless-stopped
 
   broker-d2:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m ${BROKER_MODULE:-src.broker.neural_broker}
@@ -80,6 +82,7 @@ services:
 
   # Domain 1: 2 URLLC workers (CQI pipeline) + 1 eMBB worker (anomaly detection)
   worker-d1-urllc-1:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.worker
@@ -96,6 +99,7 @@ services:
     restart: unless-stopped
 
   worker-d1-urllc-2:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.worker
@@ -112,6 +116,7 @@ services:
     restart: unless-stopped
 
   worker-d1-embb-1:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.worker
@@ -129,6 +134,7 @@ services:
 
   # Domain 2: eMBB only (no URLLC) — CQI pipelines must be forwarded to D1
   worker-d2-embb-1:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.worker
@@ -145,6 +151,7 @@ services:
     restart: unless-stopped
 
   worker-d2-embb-2:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.worker
@@ -161,6 +168,7 @@ services:
     restart: unless-stopped
 
   workload:
+    image: neural-pubsub:latest
     build: .
     command: >
       -m src.workload
