@@ -490,12 +490,28 @@ def run_single(
         )
     finally:
         compose_down(project_name, COMPOSE_FILE, env, compose_files=compose_files)
+        # Fix file ownership: Docker writes as root; make results readable
+        # by the host user so the monitor and rsync can access them.
+        _fix_result_permissions(results_dir)
 
     return {
         "run_id": run_id,
         "status": "completed" if result_file.exists() else "no_output",
         "result_file": str(result_file),
     }
+
+
+def _fix_result_permissions(results_dir: Path) -> None:
+    """Make Docker-written result files readable by the host user."""
+    try:
+        subprocess.run(
+            ["docker", "run", "--rm",
+             "-v", f"{results_dir.resolve()}:/data",
+             "alpine", "chmod", "-R", "a+rw", "/data"],
+            capture_output=True, timeout=30, check=False,
+        )
+    except Exception:
+        pass  # best-effort
 
 
 # ---------------------------------------------------------------------------
