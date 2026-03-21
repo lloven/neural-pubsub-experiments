@@ -157,16 +157,17 @@ def _cleanup_stack():
     )
 
 
-def run_phase_a_smoke() -> dict:
-    """Phase A smoke: single config (A4), single rate, single seed."""
-    logger.info("=== Phase A Smoke (Neural Pub/Sub, medium rate) ===")
+def run_phase_a_smoke(transport: str = "http") -> dict:
+    """Phase A smoke: single config (A3=neural), single rate, single seed."""
+    logger.info("=== Phase A Smoke (Neural Pub/Sub, medium rate, transport=%s) ===", transport)
     result = subprocess.run(
         [
             sys.executable, "-m", "scripts.run_phase_a",
-            "--configs", "A4",
+            "--configs", "A3",
             "--rates", "medium",
             "--complexities", "3",
             "--seeds", "42",
+            "--transports", transport,
             "--dry-run",
         ],
         capture_output=True,
