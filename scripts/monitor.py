@@ -367,15 +367,30 @@ def main():
                         help="Results directory to monitor (default: results/phase_a)")
     parser.add_argument("--interval", type=int, default=5, help="Refresh interval in seconds")
     parser.add_argument("--remote", metavar="HOST", default=None,
-                        help="Monitor experiments running on a remote SSH host. "
-                             "The results_dir path is interpreted on the remote host.")
+                        help="Monitor experiments running on a remote SSH host.")
+    parser.add_argument("--remote-dir", metavar="DIR", default=None,
+                        help="Repo directory on the remote host (default: reads HOST_D1_DIR from .env.local).")
     args = parser.parse_args()
 
     remote_host = args.remote
+    remote_dir = args.remote_dir
+
+    if remote_host and not remote_dir:
+        # Try to read from .env.local
+        env_local = PROJECT_ROOT / ".env.local"
+        if env_local.exists():
+            for line in env_local.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("HOST_D1_DIR="):
+                    remote_dir = line.split("=", 1)[1].strip()
+                    break
 
     if remote_host:
-        # For remote mode, use the path as-is (it refers to the remote filesystem)
-        results_dir = Path(args.results_dir)
+        # Prepend remote repo dir so SSH commands resolve relative paths
+        if remote_dir:
+            results_dir = Path(remote_dir) / args.results_dir
+        else:
+            results_dir = Path(args.results_dir)
     else:
         results_dir = PROJECT_ROOT / args.results_dir
 
