@@ -1,9 +1,13 @@
-"""Kafka Broker: Kafka-based baseline for pipeline stage distribution.
+"""Kafka Broker: Kafka-based baseline for pipeline stage distribution (S1).
 
 A minimal broker that uses the same API surface as NeuralBroker but distributes
 pipeline stages via Kafka topics instead of direct HTTP dispatch. Each pipeline
-type maps to a Kafka topic. Workers consume from their assigned topics and
-report results back via HTTP POST /result.
+type maps to a Kafka topic. A separate sidecar container (kafka_consumer.py)
+reads from Kafka and HTTP-dispatches to workers in round-robin order.  Workers
+execute stages and POST results back to the broker's /result endpoint.
+
+This two-process design (broker + sidecar) avoids asyncio scheduling issues
+when running a long-lived Kafka consumer inside uvicorn's event loop.
 
 Usage:
     python -m src.broker.kafka_broker --domain d1 --port 8080 \
@@ -15,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import time
 
 import uvicorn
@@ -30,10 +33,14 @@ logger = logging.getLogger(__name__)
 
 
 class KafkaBroker(BaseBroker):
-    """Baseline broker that publishes pipeline stages to Kafka topics.
+    """Baseline broker that distributes pipeline stages via Kafka topics.
 
-    Placement is implicit: Kafka's consumer-group rebalancing distributes
-    stages across consumers (workers) subscribed to the topic.
+    Publishes each stage assignment to a Kafka topic (one topic per pipeline
+    type).  A separate sidecar container (``kafka_consumer.py``) consumes
+    from these topics and HTTP-dispatches to workers in round-robin order.
+
+    This design represents the state-of-practice for NWDAF data flows
+    (S1 baseline in the manuscript).
     """
 
     def __init__(
@@ -73,9 +80,20 @@ class KafkaBroker(BaseBroker):
         app = super().build_app()
         broker = self
 
+        @app.get("/workers")
+        async def workers() -> dict:
+            """Return registered workers with their URLs (for kafka-consumer sidecar)."""
+            async with broker._workers_lock:
+                return {
+                    nid: {"url": w.url, "domain_id": w.domain_id, "slice_id": w.slice_id}
+                    for nid, w in broker._workers.items()
+                }
+
         @app.on_event("startup")
         async def _kafka_startup() -> None:
             await broker._start_producer()
+            # Consumer runs as a separate sidecar container
+            # (kafka-consumer service in docker-compose.kafka.yaml).
 
         @app.on_event("shutdown")
         async def _kafka_shutdown() -> None:
@@ -141,23 +159,7 @@ class KafkaBroker(BaseBroker):
 
 
 # ---------------------------------------------------------------------------
-# Module-level app (for uvicorn / Docker CMD)
-# ---------------------------------------------------------------------------
-
-_domain = os.environ.get("DOMAIN", "d1")
-_broker_id = os.environ.get("BROKER_ID", f"kafka-{_domain}")
-_kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
-
-_broker = KafkaBroker(
-    domain_id=_domain,
-    broker_id=_broker_id,
-    kafka_bootstrap=_kafka_bootstrap,
-)
-app = _broker.build_app()
-
-
-# ---------------------------------------------------------------------------
-# CLI
+# CLI (Docker entrypoint: python -m src.broker.kafka_broker ...)
 # ---------------------------------------------------------------------------
 
 
