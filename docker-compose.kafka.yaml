@@ -12,6 +12,9 @@ services:
 
   kafka:
     image: apache/kafka:3.7.0
+    hostname: kafka
+    dns_opt:
+      - ndots:0
     environment:
       # KRaft mode (no Zookeeper) — official Apache image env vars
       KAFKA_NODE_ID: "1"
@@ -41,8 +44,10 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Override broker-d1 to use kafka_broker
+  # Override broker-d1 to use kafka_broker (producer only; consumer is sidecar)
   broker-d1:
+    dns_opt:
+      - ndots:0
     command: >
       -m src.broker.kafka_broker
       --domain d1
@@ -56,3 +61,25 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  # Kafka consumer sidecar: reads from topics, HTTP-dispatches to workers.
+  # Runs as a separate process to avoid asyncio scheduling issues in uvicorn.
+  kafka-consumer:
+    image: neural-pubsub:latest
+    build: .
+    dns_opt:
+      - ndots:0
+    command: >
+      -m src.broker.kafka_consumer
+      --kafka-bootstrap kafka:9092
+      --broker-url http://broker-d1:8080
+    networks:
+      - federation
+      - slice-URLLC-d1
+      - slice-eMBB-d1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      broker-d1:
+        condition: service_healthy
+    restart: unless-stopped
