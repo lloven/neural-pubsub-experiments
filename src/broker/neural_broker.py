@@ -109,6 +109,9 @@ class BrokerConfig:
     governance_enabled: bool = False
     local_stage_types: list[str] = field(default_factory=list)
     trust_levels: dict[str, float] = field(default_factory=dict)
+    # Transport (dual-transport factorial experiment)
+    transport: str = "http"  # "http" or "kafka"
+    kafka_bootstrap: str | None = None
 
 
 def load_config(path: str) -> BrokerConfig:
@@ -245,6 +248,9 @@ class NeuralBroker:
         # Long-lived HTTP client (created in startup, closed in shutdown)
         self._http_client: httpx.AsyncClient | None = None
 
+        # Kafka producer (created in startup if transport='kafka')
+        self._producer = None
+
         # Federation layer
         self._propagator = SummaryPropagator(
             domain_id=config.domain_id,
@@ -253,6 +259,34 @@ class NeuralBroker:
         )
         # Peer summaries cache: domain_id -> list[SubscriptionSummary]
         self._peer_summaries: dict[str, list[SubscriptionSummary]] = {}
+
+    # ------------------------------------------------------------------
+    # Dual-transport dispatch helper
+    # ------------------------------------------------------------------
+
+    async def _send_to_worker(
+        self,
+        worker_url: str,
+        payload: dict,
+        *,
+        worker_id: str | None = None,
+        topic: str | None = None,
+    ) -> None:
+        """Send a stage execution request to a worker via HTTP or Kafka.
+
+        Args:
+            worker_url: The worker's base URL (e.g. "http://worker:8081").
+            payload: The stage execution payload.
+            worker_id: Worker node ID (used in Kafka message for consumer routing).
+            topic: Kafka topic (pipeline_type). Required if transport='kafka'.
+        """
+        if self.config.transport == "kafka":
+            msg = {**payload, "target_url": worker_url, "target_worker": worker_id or ""}
+            await self._producer.send_and_wait(topic or "default", value=msg)
+        else:
+            url = f"{worker_url.rstrip('/')}/execute"
+            resp = await self._http_client.post(url, json=payload, timeout=30.0)
+            resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Topology helpers
@@ -703,10 +737,11 @@ class NeuralBroker:
             },
         }
 
-        url = f"{worker.url.rstrip('/')}/execute"
         try:
-            resp = await http_client.post(url, json=payload, timeout=30.0)
-            resp.raise_for_status()
+            await self._send_to_worker(
+                worker.url, payload,
+                worker_id=node_id, topic=pipeline_state.pipeline_type,
+            )
             logger.debug(
                 "Dispatched stage '%s' (pipeline=%s) to worker '%s'.",
                 stage_id,
@@ -775,12 +810,11 @@ class NeuralBroker:
                     self._adaptation_tracker.record_recovery(
                         "dispatch_fail", node_id, time.time()
                     )
-                    new_url = f"{new_worker.url.rstrip('/')}/execute"
                     try:
-                        resp = await http_client.post(
-                            new_url, json=payload, timeout=30.0
+                        await self._send_to_worker(
+                            new_worker.url, payload,
+                            worker_id=new_node_id, topic=pipeline_state.pipeline_type,
                         )
-                        resp.raise_for_status()
                         return
                     except Exception as exc2:
                         logger.error(
@@ -864,14 +898,24 @@ class NeuralBroker:
         @app.on_event("startup")
         async def _startup() -> None:
             self._http_client = httpx.AsyncClient()
+            if self.config.transport == "kafka" and self.config.kafka_bootstrap:
+                import json as _json
+                from aiokafka import AIOKafkaProducer
+                self._producer = AIOKafkaProducer(
+                    bootstrap_servers=self.config.kafka_bootstrap,
+                    value_serializer=lambda v: _json.dumps(v).encode("utf-8"),
+                )
+                await self._producer.start()
+                logger.info("Kafka producer started (bootstrap=%s).", self.config.kafka_bootstrap)
             await self._propagator.start()
             self._health_check_task = asyncio.create_task(
                 self._health_check_loop()
             )
             logger.info(
-                "NeuralBroker '%s' (domain=%s) started on %s:%d.",
+                "NeuralBroker '%s' (domain=%s, transport=%s) started on %s:%d.",
                 self.config.broker_id,
                 self.config.domain_id,
+                self.config.transport,
                 self.config.host,
                 self.config.port,
             )
@@ -886,6 +930,9 @@ class NeuralBroker:
                     pass
                 self._health_check_task = None
             await self._propagator.stop()
+            if self._producer is not None:
+                await self._producer.stop()
+                self._producer = None
             if self._http_client is not None:
                 await self._http_client.aclose()
                 self._http_client = None
@@ -1457,6 +1504,17 @@ def _parse_args() -> argparse.Namespace:
         help="Enable governance constraints on placement.",
     )
     parser.add_argument(
+        "--transport",
+        default=os.environ.get("TRANSPORT", "http"),
+        choices=["http", "kafka"],
+        help="Dispatch transport: 'http' (direct) or 'kafka'.",
+    )
+    parser.add_argument(
+        "--kafka-bootstrap",
+        default=os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"),
+        help="Kafka bootstrap servers (only used with --transport kafka).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -1490,6 +1548,8 @@ def _make_config_from_args(args: argparse.Namespace) -> BrokerConfig:
         cfg.peer_urls = args.peers
     cfg.summary_interval_s = args.summary_interval_s
     cfg.governance_enabled = args.governance_enabled
+    cfg.transport = args.transport
+    cfg.kafka_bootstrap = args.kafka_bootstrap if args.transport == "kafka" else None
 
     return cfg
 
