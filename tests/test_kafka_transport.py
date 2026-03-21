@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ===========================================================================
@@ -164,4 +168,127 @@ class TestKafkaConsumerConcurrency:
         assert max_concurrent_seen <= 10, (
             f"Max concurrent dispatches was {max_concurrent_seen}, expected ≤10. "
             f"Semaphore not enforced."
+        )
+
+
+# ===========================================================================
+# Task 2: Dual-Transport Dispatch in BaseBroker
+# ===========================================================================
+
+
+class TestDualTransportBaseBroker:
+    """BaseBroker must support transport='http' (direct) and transport='kafka'."""
+
+    def test_base_broker_accepts_transport_param(self):
+        """BaseBroker.__init__ must accept a 'transport' parameter."""
+        from src.broker.static_broker import StaticBroker
+
+        # HTTP transport (default)
+        broker_http = StaticBroker(domain_id="d1", broker_id="test-http", transport="http")
+        assert broker_http.transport == "http"
+
+        # Kafka transport
+        broker_kafka = StaticBroker(
+            domain_id="d1", broker_id="test-kafka",
+            transport="kafka", kafka_bootstrap="kafka:9092",
+        )
+        assert broker_kafka.transport == "kafka"
+
+    def test_base_broker_default_transport_is_http(self):
+        """If transport not specified, default to 'http'."""
+        from src.broker.static_broker import StaticBroker
+
+        broker = StaticBroker(domain_id="d1", broker_id="test")
+        assert broker.transport == "http"
+
+    def test_dispatch_stage_http_posts_directly(self):
+        """With transport='http', _dispatch_stage POSTs directly to worker URL."""
+        from src.broker.static_broker import StaticBroker
+        from src.broker.models import PipelineState, WorkerInfo
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = StaticBroker(domain_id="d1", broker_id="test", transport="http")
+
+        # Register a worker
+        broker._workers["w1"] = WorkerInfo(
+            node_id="w1", domain_id="d1", slice_id="embb",
+            capacity=10.0, url="http://worker1:8081",
+        )
+
+        # Create a simple pipeline
+        dag = PipelineDAG()
+        dag.add_stage(Stage(id="s1", stage_type="predict", computational_demand=1.0, output_data_rate=1.0))
+        ps = PipelineState(
+            pipeline_id="p1", pipeline_type="cqi_prediction",
+            dag=dag, placement={"s1": "w1"},
+        )
+
+        # Mock the HTTP client
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.post.return_value = mock_resp
+        broker._http_client = mock_client
+
+        asyncio.run(broker._dispatch_stage(ps, "s1"))
+
+        mock_client.post.assert_called_once()
+        url_called = mock_client.post.call_args[0][0]
+        assert "worker1:8081/execute" in url_called
+
+    def test_dispatch_stage_kafka_publishes_with_target_url(self):
+        """With transport='kafka', _dispatch_stage publishes to Kafka with target_url."""
+        from src.broker.static_broker import StaticBroker
+        from src.broker.models import PipelineState, WorkerInfo
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = StaticBroker(
+            domain_id="d1", broker_id="test",
+            transport="kafka", kafka_bootstrap="kafka:9092",
+        )
+
+        broker._workers["w1"] = WorkerInfo(
+            node_id="w1", domain_id="d1", slice_id="embb",
+            capacity=10.0, url="http://worker1:8081",
+        )
+
+        dag = PipelineDAG()
+        dag.add_stage(Stage(id="s1", stage_type="predict", computational_demand=1.0, output_data_rate=1.0))
+        ps = PipelineState(
+            pipeline_id="p1", pipeline_type="cqi_prediction",
+            dag=dag, placement={"s1": "w1"},
+        )
+
+        # Mock the Kafka producer
+        mock_producer = AsyncMock()
+        broker._producer = mock_producer
+
+        asyncio.run(broker._dispatch_stage(ps, "s1"))
+
+        mock_producer.send_and_wait.assert_called_once()
+        call_args = mock_producer.send_and_wait.call_args
+        topic = call_args[0][0]
+        message = call_args[1].get("value") or call_args[0][1]
+
+        assert topic == "cqi_prediction", f"Expected topic 'cqi_prediction', got '{topic}'"
+        assert message["target_url"] == "http://worker1:8081", (
+            f"Kafka message must contain target_url from placement"
+        )
+        assert message["target_worker"] == "w1"
+        assert message["pipeline_id"] == "p1"
+        assert message["stage_id"] == "s1"
+
+
+class TestStaticBrokerNoDispatchOverride:
+    """StaticBroker must NOT override _dispatch_stage (inherits from BaseBroker)."""
+
+    def test_static_broker_uses_base_dispatch(self):
+        """StaticBroker._dispatch_stage should be inherited, not overridden."""
+        from src.broker.static_broker import StaticBroker
+        from src.broker.base import BaseBroker
+
+        # If StaticBroker defines its own _dispatch_stage, it shadows BaseBroker's.
+        # After refactoring, it should NOT define one.
+        assert StaticBroker._dispatch_stage is BaseBroker._dispatch_stage, (
+            "StaticBroker should inherit _dispatch_stage from BaseBroker, not override it."
         )
