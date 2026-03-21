@@ -1,7 +1,9 @@
-"""Unit tests for baseline brokers (static_broker and kafka_broker).
+"""Unit tests for baseline brokers (static_broker).
 
-Tests the StaticBroker and KafkaBroker placement logic without requiring
+Tests the StaticBroker placement logic without requiring
 a running Kafka cluster or Docker infrastructure.
+KafkaBroker was removed in the dual-transport refactor (2026-03-21);
+Kafka transport is now a BaseBroker flag, tested in test_kafka_transport.py.
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.broker.kafka_broker import KafkaBroker
 from src.broker.models import WorkerInfo
 from src.broker.static_broker import PlacementStrategy, StaticBroker
 
@@ -212,64 +213,6 @@ def test_static_broker_accepts_string():
     assert broker.placement is PlacementStrategy.ROUND_ROBIN
 
 
-# ---------------------------------------------------------------------------
-# KafkaBroker
-# ---------------------------------------------------------------------------
-
-
-def test_kafka_broker_instantiation():
-    """KafkaBroker can be instantiated with default parameters."""
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-    assert broker.domain_id == "d1"
-    assert broker.broker_id == "kafka-test"
-    assert broker.kafka_bootstrap == "kafka:9092"
-    assert broker._producer is None
-
-
-def test_kafka_broker_custom_bootstrap():
-    """KafkaBroker respects custom bootstrap servers."""
-    broker = KafkaBroker(
-        domain_id="d2",
-        broker_id="kafka-d2",
-        kafka_bootstrap="localhost:9093",
-    )
-    assert broker.kafka_bootstrap == "localhost:9093"
-
-
-def test_kafka_broker_placement_returns_sentinel():
-    """KafkaBroker._compute_placement returns 'kafka' for all stages."""
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-
-    from src.pipeline.patterns import cqi_prediction_pipeline
-
-    dag = cqi_prediction_pipeline()
-    placement = broker._compute_placement(dag)
-
-    assert set(placement.keys()) == set(dag.stages.keys())
-    assert all(v == "kafka" for v in placement.values())
-
-
-@pytest.mark.asyncio
-async def test_kafka_broker_placement_all_pipeline_types():
-    """KafkaBroker placement works for all registered pipeline types."""
-    from src.broker.base import _PIPELINE_FACTORIES
-
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-
-    for pipeline_type in _PIPELINE_FACTORIES:
-        dag = _PIPELINE_FACTORIES[pipeline_type]({})
-        placement = broker._compute_placement(dag)
-        assert all(v == "kafka" for v in placement.values()), (
-            f"Pipeline type '{pipeline_type}' has non-kafka placement"
-        )
-
-
-# ---------------------------------------------------------------------------
-# KafkaBroker: consumer dispatch (sidecar)
-#
-# The Kafka consumer now runs as a separate sidecar container
-# (src/broker/kafka_consumer.py). The old in-process consumer was removed
-# because asyncio.create_task doesn't reliably schedule under Docker CE's
-# uvicorn event loop. Sidecar integration is tested via Docker smoke tests
-# (./run-experiments.sh single A1 low 3 42).
-# ---------------------------------------------------------------------------
+# KafkaBroker was removed in the dual-transport refactor.
+# Kafka transport is now a BaseBroker flag (transport='kafka').
+# See tests/test_kafka_transport.py for transport-layer tests.
