@@ -162,7 +162,7 @@ def run_phase_a_smoke() -> dict:
     logger.info("=== Phase A Smoke (Neural Pub/Sub, medium rate) ===")
     result = subprocess.run(
         [
-            sys.executable, str(PROJECT_ROOT / "scripts" / "run_phase_a.py"),
+            sys.executable, "-m", "scripts.run_phase_a",
             "--configs", "A4",
             "--rates", "medium",
             "--complexities", "3",
