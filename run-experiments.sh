@@ -185,10 +185,11 @@ smoke)
 phase-a)
     auto_sync
     PHASE_SESSION="npubsub-phase-a"
-    if maybe_tmux_wrap "$PHASE_SESSION" "$0 ${REMOTE_MODE:+--remote} phase-a ${RESUME:+--resume}"; then
+    PY_CMD="python3 -m scripts.run_phase_a $(py_resume)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
-    rcmd "python3 -m scripts.run_phase_a $(py_resume)"
+    rcmd "$PY_CMD"
     ;;
 
 # --- Phase A.5 ---------------------------------------------------------------
@@ -201,20 +202,22 @@ phase-a5)
 phase-a6)
     auto_sync
     PHASE_SESSION="npubsub-phase-a6"
-    if maybe_tmux_wrap "$PHASE_SESSION" "$0 ${REMOTE_MODE:+--remote} phase-a6 ${RESUME:+--resume}"; then
+    PY_CMD="python3 -m scripts.run_phase_a5_a6 --phase a6 $(py_resume)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
-    rcmd "python3 -m scripts.run_phase_a5_a6 --phase a6 $(py_resume)"
+    rcmd "$PY_CMD"
     ;;
 
 # --- Phase B -----------------------------------------------------------------
 phase-b)
     auto_sync
     PHASE_SESSION="npubsub-phase-b"
-    if maybe_tmux_wrap "$PHASE_SESSION" "$0 ${REMOTE_MODE:+--remote} phase-b ${RESUME:+--resume}"; then
+    PY_CMD="python3 -m scripts.run_phase_b $(py_resume)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
-    rcmd "python3 -m scripts.run_phase_b $(py_resume)"
+    rcmd "$PY_CMD"
     ;;
 
 # --- Phase C -----------------------------------------------------------------
@@ -228,20 +231,22 @@ phase-c)
         sync_host "$HOST_D2" "${HOST_D2_DIR:?}" "${HOST_D2_GIT:?}"
     fi
     PHASE_SESSION="npubsub-phase-c"
-    if maybe_tmux_wrap "$PHASE_SESSION" "$0 ${REMOTE_MODE:+--remote} phase-c ${RESUME:+--resume}"; then
+    PY_CMD="python3 -m scripts.run_phase_c $(py_resume)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
-    rcmd "python3 -m scripts.run_phase_c $(py_resume)"
+    rcmd "$PY_CMD"
     ;;
 
 # --- Phase D -----------------------------------------------------------------
 phase-d)
     auto_sync
     PHASE_SESSION="npubsub-phase-d"
-    if maybe_tmux_wrap "$PHASE_SESSION" "$0 ${REMOTE_MODE:+--remote} phase-d ${RESUME:+--resume}"; then
+    PY_CMD="python3 -m scripts.run_phase_d $(py_resume)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
-    rcmd "python3 -m scripts.run_phase_d $(py_resume)"
+    rcmd "$PY_CMD"
     ;;
 
 # --- Single run --------------------------------------------------------------

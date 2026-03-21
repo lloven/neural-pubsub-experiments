@@ -28,7 +28,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 import random as _random_module
@@ -519,7 +519,7 @@ def _update_progress(
     progress[run_id] = {
         "status": status,
         "detail": detail,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     _save_progress(results_dir, progress)
 

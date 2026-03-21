@@ -141,9 +141,10 @@ def get_docker_containers(remote_host: str | None = None) -> list[dict]:
     """
     try:
         if remote_host:
+            # Send as single command string so SSH preserves \t and {{}} format
             cmd = [
                 "ssh", remote_host,
-                "docker", "ps", "--format", "{{.Names}}\t{{.Status}}",
+                "docker ps --format '{{.Names}}\t{{.Status}}'",
             ]
         else:
             cmd = ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"]
@@ -161,11 +162,36 @@ def get_docker_containers(remote_host: str | None = None) -> list[dict]:
         return []
 
 
-def get_run_pipelines(results_dir: Path, run_id: str) -> tuple[int, int]:
+def get_run_pipelines(
+    results_dir: Path, run_id: str, remote_host: str | None = None,
+) -> tuple[int, int]:
     """Get pipeline count from partial CSV and final CSV.
 
     Returns (partial_count, final_count).
+
+    Args:
+        results_dir: Directory containing result CSV files.
+        run_id: Run identifier used as filename prefix.
+        remote_host: If set, check files on this SSH host instead of locally.
     """
+    if remote_host:
+        # Use SSH ls + wc to count rows remotely
+        try:
+            result = subprocess.run(
+                ["ssh", remote_host,
+                 f"wc -l {results_dir}/{run_id}*.csv 2>/dev/null | tail -1"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split()
+                if parts and parts[0].isdigit():
+                    total_lines = int(parts[0])
+                    # Subtract 1 per file for header (rough estimate)
+                    return 0, max(0, total_lines - 1)
+        except Exception:
+            pass
+        return 0, 0
+
     # Check for partial CSV (written every 60s by broker)
     partial_files = list(results_dir.glob(f"{run_id}*.partial.csv"))
     partial_count = 0
@@ -268,7 +294,7 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
             except (ValueError, TypeError):
                 run_elapsed = 0
 
-            partial, final = get_run_pipelines(results_dir, run_id)
+            partial, final = get_run_pipelines(results_dir, run_id, remote_host=remote_host)
             pipe_count = max(partial, final)
 
             # Find matching containers
@@ -276,7 +302,12 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
             healthy = sum(1 for c in run_containers if "healthy" in c["status"].lower())
             total_c = len(run_containers)
 
-            pipe_str = f"{pipe_count} pipelines" if pipe_count > 0 else "starting..."
+            if pipe_count > 0:
+                pipe_str = f"{pipe_count} pipelines"
+            elif total_c > 0:
+                pipe_str = "in progress (no CSV yet)"
+            else:
+                pipe_str = "starting..."
             if total_c > 0:
                 container_str = f"{total_c} up" + (f", {healthy} health-OK" if healthy > 0 else "")
             else:
