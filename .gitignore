@@ -19,3 +19,7 @@ REFACTOR-PLAN.md
 
 # Internal reference docs (not for public repo)
 docs/
+
+# 5GTN deployment scripts (internal infra details, SSH config, IP ranges)
+scripts/5gtn/
+.5gtn-staging/
