@@ -149,6 +149,11 @@ class WorkloadGenerator:
     # Maximum number of concurrent in-flight publish calls.
     _MAX_CONCURRENT_PUBLISHES = 64
 
+    # Maximum seconds to wait for in-flight publishes after the arrival
+    # process ends.  After this timeout, remaining tasks are cancelled.
+    # Prevents indefinite hangs when the broker is overloaded (BUG-001).
+    _DEFAULT_DRAIN_TIMEOUT_S = 30.0
+
     def __init__(self, config: WorkloadConfig) -> None:
         self.config = config
         self._rng = np.random.default_rng(config.seed)
@@ -158,6 +163,7 @@ class WorkloadGenerator:
         self._publish_semaphore = asyncio.Semaphore(self._MAX_CONCURRENT_PUBLISHES)
         self._pending_tasks: set[asyncio.Task] = set()
         self._warmup_pipeline_ids: set[str] = set()
+        self._drain_timeout_s: float = self._DEFAULT_DRAIN_TIMEOUT_S
 
         # Validate pipeline_mix keys
         unknown = set(config.pipeline_mix) - set(self._TEMPLATES)
@@ -287,9 +293,30 @@ class WorkloadGenerator:
                 self._pending_tasks.add(task)
                 task.add_done_callback(self._pending_tasks.discard)
 
-            # Wait for any remaining in-flight publishes to complete.
+            # Wait for in-flight publishes with a bounded drain timeout.
+            # BUG-001: without a timeout, thousands of queued tasks can hang
+            # for hours when the broker is overloaded (503 / slow responses).
             if self._pending_tasks:
-                await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+                n_pending = len(self._pending_tasks)
+                logger.info(
+                    "Draining %d pending publish tasks (timeout=%.0fs) ...",
+                    n_pending, self._drain_timeout_s,
+                )
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*self._pending_tasks, return_exceptions=True),
+                        timeout=self._drain_timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    n_remaining = len(self._pending_tasks)
+                    logger.warning(
+                        "Drain timeout: cancelling %d remaining tasks "
+                        "(started with %d).", n_remaining, n_pending,
+                    )
+                    for task in self._pending_tasks:
+                        task.cancel()
+                    # Give cancelled tasks a moment to clean up
+                    await asyncio.gather(*self._pending_tasks, return_exceptions=True)
                 self._pending_tasks.clear()
 
         elapsed = time.time() - self._run_start

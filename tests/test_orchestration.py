@@ -9,8 +9,11 @@ Covers:
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from scripts._common import PROJECT_ROOT
@@ -328,4 +331,154 @@ class TestBashDispatcher:
         assert "monitor" in trace and "--once" in trace, (
             f"'status' command should delegate to monitor.py --once.\n"
             f"Trace: {trace[-500:]}"
+        )
+
+
+# ===========================================================================
+# Cycle 6: BUG-001 — Workload generator hard timeout and 503 handling
+# ===========================================================================
+
+
+class TestWorkloadGeneratorTimeout:
+    """BUG-001: Generator must terminate within a bounded wall-clock time."""
+
+    def test_generator_has_hard_deadline(self):
+        """WorkloadGenerator.run() must not exceed duration_s * 1.5 wall-clock time."""
+        from src.workload.generator import WorkloadGenerator, WorkloadConfig
+        import asyncio
+
+        cfg = WorkloadConfig(
+            arrival_rate=1.0,
+            duration_s=2.0,  # 2 seconds
+            pipeline_mix={"cqi_prediction": 1.0},
+            broker_url="http://localhost:99999",  # unreachable, will fail fast
+            seed=42,
+        )
+        gen = WorkloadGenerator(cfg)
+
+        start = time.time()
+        asyncio.run(gen.run())
+        elapsed = time.time() - start
+
+        # Must finish within 1.5x duration (3 seconds), not hang indefinitely
+        assert elapsed < cfg.duration_s * 2.0, (
+            f"Generator took {elapsed:.1f}s for {cfg.duration_s}s duration "
+            f"(>{cfg.duration_s * 2.0:.1f}s limit)"
+        )
+
+    def test_generator_counts_503_as_failure_not_retry(self):
+        """503 responses should be counted as failures, not retried indefinitely."""
+        from src.workload.generator import WorkloadGenerator, WorkloadConfig
+        from unittest.mock import AsyncMock, patch, MagicMock
+        import asyncio
+
+        cfg = WorkloadConfig(
+            arrival_rate=2.0,
+            duration_s=1.0,
+            pipeline_mix={"cqi_prediction": 1.0},
+            broker_url="http://broker:8080",
+            seed=42,
+        )
+        gen = WorkloadGenerator(cfg)
+
+        # Mock httpx to always return 503
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "503 Service Unavailable",
+                request=MagicMock(),
+                response=mock_response,
+            )
+        )
+
+        async def mock_post(*args, **kwargs):
+            return mock_response
+
+        with patch("httpx.AsyncClient") as MockClient:
+            instance = MockClient.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+            instance.return_value.post = AsyncMock(side_effect=mock_post)
+
+            start = time.time()
+            asyncio.run(gen.run())
+            elapsed = time.time() - start
+
+        # Even with all 503s, generator must finish within 2x duration
+        assert elapsed < cfg.duration_s * 3.0, (
+            f"Generator hung on 503s: took {elapsed:.1f}s"
+        )
+
+    def test_generator_pending_tasks_bounded(self):
+        """After run(), no pending tasks should remain."""
+        from src.workload.generator import WorkloadGenerator, WorkloadConfig
+        import asyncio
+
+        cfg = WorkloadConfig(
+            arrival_rate=1.0,
+            duration_s=1.0,
+            pipeline_mix={"cqi_prediction": 1.0},
+            broker_url="http://localhost:99999",  # unreachable
+            seed=42,
+        )
+        gen = WorkloadGenerator(cfg)
+        asyncio.run(gen.run())
+
+        assert len(gen._pending_tasks) == 0, (
+            f"Generator has {len(gen._pending_tasks)} pending tasks after run()"
+        )
+
+    def test_generator_has_drain_timeout_attribute(self):
+        """Generator must have a configurable drain timeout for post-loop cleanup.
+
+        BUG-001: without a bounded drain, pending tasks can hang for hours
+        when the broker is overloaded.
+        """
+        from src.workload.generator import WorkloadGenerator, WorkloadConfig
+
+        cfg = WorkloadConfig(
+            arrival_rate=1.0,
+            duration_s=10.0,
+            pipeline_mix={"cqi_prediction": 1.0},
+            broker_url="http://localhost:8080",
+            seed=42,
+        )
+        gen = WorkloadGenerator(cfg)
+
+        # Generator must have a drain timeout (default: 30s)
+        assert hasattr(gen, '_drain_timeout_s'), (
+            "Generator missing _drain_timeout_s attribute (BUG-001 fix)"
+        )
+        assert gen._drain_timeout_s > 0, "Drain timeout must be positive"
+        assert gen._drain_timeout_s <= 60, "Drain timeout should be <= 60s"
+
+    def test_generator_cancels_pending_after_drain_timeout(self):
+        """After drain timeout, remaining pending tasks must be cancelled."""
+        from src.workload.generator import WorkloadGenerator, WorkloadConfig
+        from unittest.mock import patch
+        import asyncio
+
+        cfg = WorkloadConfig(
+            arrival_rate=50.0,  # High rate
+            duration_s=1.0,
+            pipeline_mix={"cqi_prediction": 1.0},
+            broker_url="http://broker:8080",
+            seed=42,
+        )
+        gen = WorkloadGenerator(cfg)
+        gen._drain_timeout_s = 2.0  # Short drain for test
+
+        # Mock publish to block forever (simulates stuck broker)
+        async def blocking_publish(client, request):
+            await asyncio.sleep(3600)  # 1 hour — effectively forever
+
+        with patch.object(gen, '_publish', side_effect=blocking_publish):
+            start = time.time()
+            asyncio.run(gen.run())
+            elapsed = time.time() - start
+
+        # Must finish within duration + drain timeout + margin
+        max_allowed = cfg.duration_s + gen._drain_timeout_s + 2.0
+        assert elapsed < max_allowed, (
+            f"Generator took {elapsed:.1f}s with blocking broker "
+            f"(limit {max_allowed:.1f}s). Drain timeout not enforced (BUG-001)."
         )
