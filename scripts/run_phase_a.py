@@ -71,8 +71,8 @@ class RunConfig:
     pipeline_complexity: int
     seed: int
     transport: str = "http"
-    warmup_s: int = 600
-    measurement_s: int = 1800
+    warmup_s: int = 120
+    measurement_s: int = 600
     placement_strategy: str = "neural"
 
     @property
@@ -115,27 +115,63 @@ def build_run_matrix(
     complexities: list[int] | None = None,
     transports: list[str] | None = None,
 ) -> list[RunConfig]:
-    """Build the full combinatorial run matrix (placement × transport × rate × seed)."""
+    """Build Phase A run matrix: core factorial + rate sensitivity.
+
+    Core factorial (medium rate): all configs × all transports × all seeds
+      → proves transport orthogonality and compares placement strategies.
+    Rate sensitivity (A3/http only): all rates × all seeds
+      → shows Neural Pub/Sub handles different loads.
+
+    This avoids the full Cartesian product (which would be 90+ runs).
+    """
     if rates is None:
         rates = list(RATES.keys())
     if complexities is None:
         complexities = list(COMPLEXITIES.keys())
     if transports is None:
         transports = TRANSPORTS
+
     runs = []
-    for config_name, transport, rate_label, complexity, seed in itertools.product(
-        configs, transports, rates, complexities, seeds,
+    seen = set()
+
+    # Core factorial: all configs × all transports × medium rate only
+    for config_name, transport, complexity, seed in itertools.product(
+        configs, transports, complexities, seeds,
     ):
         cfg = CONFIGS[config_name]
-        runs.append(RunConfig(
+        rc = RunConfig(
             config_name=config_name,
-            rate_label=rate_label,
-            arrival_rate=RATES[rate_label],
+            rate_label="medium",
+            arrival_rate=RATES["medium"],
             pipeline_complexity=complexity,
             seed=seed,
             transport=transport,
             placement_strategy=cfg["placement_strategy"],
-        ))
+        )
+        if rc.run_id not in seen:
+            runs.append(rc)
+            seen.add(rc.run_id)
+
+    # Rate sensitivity: A3 (neural) × http × all rates × all seeds
+    neural_config = "A3"
+    if neural_config in configs:
+        cfg = CONFIGS[neural_config]
+        for rate_label, complexity, seed in itertools.product(
+            rates, complexities, seeds,
+        ):
+            rc = RunConfig(
+                config_name=neural_config,
+                rate_label=rate_label,
+                arrival_rate=RATES[rate_label],
+                pipeline_complexity=complexity,
+                seed=seed,
+                transport="http",
+                placement_strategy=cfg["placement_strategy"],
+            )
+            if rc.run_id not in seen:
+                runs.append(rc)
+                seen.add(rc.run_id)
+
     return runs
 
 

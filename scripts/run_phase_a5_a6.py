@@ -166,7 +166,7 @@ class ContentionRunConfig:
     n_workers: int
     seed: int
     failure: str | None = None
-    warmup_s: int = 600
+    warmup_s: int = 120
     measurement_s: int = 900
 
 

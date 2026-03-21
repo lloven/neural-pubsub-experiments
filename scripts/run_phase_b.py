@@ -33,6 +33,7 @@ from scripts._common import (
     PROJECT_ROOT,
     inject_compose_kill,
     phase_main,
+    resolve_config,
     run_single,
 )
 
@@ -62,26 +63,32 @@ class RunConfig:
     num_slices: int = 1
     governance: bool = False
     failure_injection: bool = False
-    failure_delay_s: int = 900
-    warmup_s: int = 600
-    measurement_s: int = 1800
+    transport: str = "http"
+    failure_delay_s: int = 300
+    warmup_s: int = 120
+    measurement_s: int = 600
 
     @property
     def run_id(self) -> str:
-        return f"{self.config_name}_rate-{DEFAULT_RATE}_stages-{DEFAULT_COMPLEXITY}_seed-{self.seed}"
+        return f"{self.config_name}_{self.transport}_rate-{DEFAULT_RATE}_stages-{DEFAULT_COMPLEXITY}_seed-{self.seed}"
 
 
 def build_run_matrix(
     configs: list[str],
     seeds: list[int],
+    transports: list[str] | None = None,
 ) -> list[RunConfig]:
-    """Build the run matrix (medium rate, 3-stage complexity only)."""
+    """Build the run matrix: configs × transports × seeds."""
+    if transports is None:
+        from scripts._common import TRANSPORTS
+        transports = TRANSPORTS
     runs = []
-    for config_name, seed in itertools.product(configs, seeds):
+    for config_name, transport, seed in itertools.product(configs, transports, seeds):
         cfg = CONFIGS[config_name]
         runs.append(RunConfig(
             config_name=config_name,
             seed=seed,
+            transport=transport,
             num_slices=cfg["num_slices"],
             governance=cfg["governance"],
             failure_injection=cfg["failure_injection"],
@@ -90,20 +97,25 @@ def build_run_matrix(
 
 
 def _run(run: RunConfig, dry_run: bool) -> dict:
-    run_id = (
-        f"{run.config_name}_rate-{DEFAULT_RATE}_"
-        f"stages-{DEFAULT_COMPLEXITY}_seed-{run.seed}"
-    )
+    run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
 
     logger.info(
-        "Run: %s (rate=%.1f, stages=%d, seed=%d, slices=%d, "
+        "Run: %s (rate=%.1f, stages=%d, seed=%d, transport=%s, slices=%d, "
         "governance=%s, failure=%s, duration=%ds)",
         run_id, DEFAULT_RATE_VALUE, DEFAULT_COMPLEXITY, run.seed,
-        run.num_slices, run.governance, run.failure_injection, total_duration,
+        run.transport, run.num_slices, run.governance, run.failure_injection,
+        total_duration,
+    )
+
+    # Use resolve_config for compose files (handles transport overlay)
+    resolved = resolve_config(
+        run.config_name, rate=DEFAULT_RATE, stages=DEFAULT_COMPLEXITY,
+        seed=run.seed, transport=run.transport,
     )
 
     env = {
+        **resolved.env,
         "PLACEMENT_STRATEGY": "neural",
         "ARRIVAL_RATE": str(DEFAULT_RATE_VALUE),
         "DURATION_S": str(total_duration),
@@ -119,15 +131,7 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
     if run.failure_injection:
         env["FAILURE_DELAY_S"] = str(run.failure_delay_s)
 
-    # Compose overlay selection based on config
-    # B1: flat overlay (single slice, no isolation)
-    # B3/B4: governance overlay (governance constraints)
-    # B2: base only (default slice-aware, no governance)
-    compose_files: list[Path] | None = None
-    if run.config_name == "B1":
-        compose_files = [COMPOSE_FILE, COMPOSE_FLAT]
-    elif run.config_name in ("B3", "B4"):
-        compose_files = [COMPOSE_FILE, COMPOSE_GOVERNANCE]
+    compose_files = resolved.compose_files
 
     failure_fn = None
     if run.failure_injection:

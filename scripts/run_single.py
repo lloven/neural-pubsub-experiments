@@ -48,8 +48,8 @@ def main() -> None:
 
     # Merge resolved env with duration info
     env = dict(cfg.env)
-    warmup_s = 600
-    measurement_s = 1800
+    warmup_s = 120
+    measurement_s = 600
     total_duration = warmup_s + measurement_s
     env.setdefault("DURATION_S", str(total_duration))
     env.setdefault("WARMUP_S", str(warmup_s))
