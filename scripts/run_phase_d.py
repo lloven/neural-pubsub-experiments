@@ -56,8 +56,8 @@ class RunConfig:
     seed: int
     failure_type: str
     failure_target: str
-    warmup_s: int = 600
-    measurement_s: int = 1800
+    warmup_s: int = 120
+    measurement_s: int = 600
     failure_delay_s: int = 900
 
 

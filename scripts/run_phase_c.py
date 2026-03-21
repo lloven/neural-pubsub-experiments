@@ -78,8 +78,8 @@ class RunConfig:
     governance: bool = False
     broker_failure: bool = False
     failure_delay_s: int = 900
-    warmup_s: int = 600
-    measurement_s: int = 1800
+    warmup_s: int = 120
+    measurement_s: int = 600
 
 
 def build_run_matrix(
