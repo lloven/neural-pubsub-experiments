@@ -43,6 +43,11 @@ COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
 DEFAULT_SEEDS = [42, 123, 456, 789, 0]  # 5 seeds (Phases A/B/C); Phase D uses 10
 EXTENDED_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]  # 10 seeds for Phase D
 
+# Default run timing (seconds). Used by phase runners and monitor.
+DEFAULT_WARMUP_S = 120
+DEFAULT_MEASUREMENT_S = 600
+DEFAULT_RUN_DURATION_S = DEFAULT_WARMUP_S + DEFAULT_MEASUREMENT_S
+
 # Rate label → numeric arrival rate (events/second)
 RATE_MAP: dict[str, float] = {
     "low": 2.0,

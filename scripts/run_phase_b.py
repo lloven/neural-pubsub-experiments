@@ -30,6 +30,8 @@ from scripts._common import (
     COMPOSE_FILE,
     COMPOSE_FLAT,
     COMPOSE_GOVERNANCE,
+    DEFAULT_MEASUREMENT_S,
+    DEFAULT_WARMUP_S,
     PROJECT_ROOT,
     inject_compose_kill,
     phase_main,
@@ -65,8 +67,8 @@ class RunConfig:
     failure_injection: bool = False
     transport: str = "http"
     failure_delay_s: int = 300
-    warmup_s: int = 120
-    measurement_s: int = 600
+    warmup_s: int = DEFAULT_WARMUP_S
+    measurement_s: int = DEFAULT_MEASUREMENT_S
 
     @property
     def run_id(self) -> str:

@@ -29,6 +29,8 @@ from pathlib import Path
 from scripts._common import (
     COMPOSE_FILE,
     COMPOSE_KAFKA,
+    DEFAULT_MEASUREMENT_S,
+    DEFAULT_WARMUP_S,
     PROJECT_ROOT,
     TRANSPORTS,
     phase_main,
@@ -71,8 +73,8 @@ class RunConfig:
     pipeline_complexity: int
     seed: int
     transport: str = "http"
-    warmup_s: int = 120
-    measurement_s: int = 600
+    warmup_s: int = DEFAULT_WARMUP_S
+    measurement_s: int = DEFAULT_MEASUREMENT_S
     placement_strategy: str = "neural"
 
     @property
