@@ -80,7 +80,7 @@ fi
 # --- Remote command helper ---------------------------------------------------
 rcmd() {
     if [[ -n "$TARGET_HOST" ]]; then
-        ssh "$TARGET_HOST" "cd ~/$REMOTE_DIR && $*"
+        ssh "$TARGET_HOST" "cd ~/$REMOTE_DIR && source ~/.venv/bin/activate 2>/dev/null; $*"
     else
         eval "$*"
     fi
@@ -129,7 +129,7 @@ maybe_tmux_wrap() {
     if [[ -z "${TMUX:-}" ]]; then
         if [[ -n "$REMOTE_MODE" ]]; then
             info "Creating tmux session '$session_name' on $TARGET_HOST ..."
-            ssh "$TARGET_HOST" "tmux new-session -d -s '$session_name' 'cd ~/$REMOTE_DIR && $full_cmd'" 2>/dev/null || true
+            ssh "$TARGET_HOST" "tmux new-session -d -s '$session_name' 'cd ~/$REMOTE_DIR && source ~/.venv/bin/activate 2>/dev/null; $full_cmd'" 2>/dev/null || true
             info "Session created. Attach with: ssh $TARGET_HOST -t 'tmux attach -t $session_name'"
             return 0
         else
