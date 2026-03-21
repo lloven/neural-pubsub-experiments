@@ -262,14 +262,14 @@ stop)
 
 # --- Status ------------------------------------------------------------------
 status)
+    # Monitor always runs LOCALLY (reads remote data via SSH when --remote)
+    remote_flag=""
     if [[ -n "$REMOTE_MODE" ]]; then
-        rcmd "python3 -m scripts.monitor --once --remote $TARGET_HOST"
-    else
-        python3 -m scripts.monitor --once results/phase_a 2>/dev/null || true
-        python3 -m scripts.monitor --once results/phase_b 2>/dev/null || true
-        python3 -m scripts.monitor --once results/phase_c 2>/dev/null || true
-        python3 -m scripts.monitor --once results/phase_d 2>/dev/null || true
+        remote_flag="--remote $TARGET_HOST"
     fi
+    for phase in phase_a phase_b phase_c phase_d; do
+        python3 -m scripts.monitor --once $remote_flag "results/$phase" 2>/dev/null || true
+    done
     ;;
 
 # --- Sync (push + rebuild, no experiments) -----------------------------------
