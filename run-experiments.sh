@@ -83,7 +83,7 @@ fi
 # rcmd "command" — execute on remote host if --remote, else locally.
 rcmd() {
     if [[ -n "$TARGET_HOST" ]]; then
-        ssh "$TARGET_HOST" "cd $REMOTE_DIR && $*"
+        ssh "$TARGET_HOST" "cd ~/$REMOTE_DIR && $*"
     else
         eval "$*"
     fi
@@ -93,7 +93,7 @@ rcmd() {
 rcmd_host() {
     local host="$1" dir="$2"
     shift 2
-    ssh "$host" "cd $dir && $*"
+    ssh "$host" "cd ~/$dir && $*"
 }
 
 # --- Auto-sync check ---------------------------------------------------------
@@ -109,7 +109,7 @@ sync_host() {
     fi
 
     local_head="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-    remote_head="$(ssh "$host" "cd $dir && git rev-parse HEAD" 2>/dev/null || echo "unknown")"
+    remote_head="$(ssh "$host" "cd ~/$dir && git rev-parse HEAD" 2>/dev/null || echo "unknown")"
 
     if [[ "$local_head" == "$remote_head" ]]; then
         ok "Remote $host is up to date ($local_head)."
@@ -120,7 +120,7 @@ sync_host() {
     info "Pushing to $git_remote and rebuilding on $host ..."
 
     git -C "$PROJECT_DIR" push "$git_remote" main 2>&1 | sed 's/^/  [git] /'
-    ssh "$host" "cd $dir && git pull --ff-only && docker build -t neural-pubsub:latest ." 2>&1 | tail -5
+    ssh "$host" "cd ~/$dir && git pull --ff-only && docker build -t neural-pubsub:latest ." 2>&1 | tail -5
 
     ok "Remote $host synced and rebuilt."
 }
@@ -205,7 +205,7 @@ run_single() {
     fi
 
     # Add any extra env vars (e.g., WARMUP_S)
-    for ev in "${extra_env[@]}"; do
+    for ev in "${extra_env[@]+"${extra_env[@]}"}"; do
         env_prefix="$env_prefix $ev"
     done
 
@@ -302,7 +302,7 @@ maybe_tmux_wrap() {
         if [[ -n "$REMOTE_MODE" ]]; then
             # Create tmux session on remote host
             info "Creating tmux session '$session_name' on $TARGET_HOST ..."
-            ssh "$TARGET_HOST" "tmux new-session -d -s '$session_name' 'cd $REMOTE_DIR && $full_cmd'" 2>/dev/null || true
+            ssh "$TARGET_HOST" "tmux new-session -d -s '$session_name' 'cd ~/$REMOTE_DIR && $full_cmd'" 2>/dev/null || true
             info "Session created. Attach with: ssh $TARGET_HOST -t 'tmux attach -t $session_name'"
             return 0
         else
