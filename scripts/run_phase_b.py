@@ -66,6 +66,10 @@ class RunConfig:
     warmup_s: int = 600
     measurement_s: int = 1800
 
+    @property
+    def run_id(self) -> str:
+        return f"{self.config_name}_rate-{DEFAULT_RATE}_stages-{DEFAULT_COMPLEXITY}_seed-{self.seed}"
+
 
 def build_run_matrix(
     configs: list[str],

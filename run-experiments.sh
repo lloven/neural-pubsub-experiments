@@ -173,7 +173,12 @@ case "$ACTION" in
 # --- Smoke test --------------------------------------------------------------
 smoke)
     auto_sync
-    rcmd "python3 -m scripts.run_smoke_test"
+    # Pass --phases flag if user specified specific phases
+    SMOKE_ARGS=""
+    for arg in "${remaining_args[@]+"${remaining_args[@]}"}"; do
+        SMOKE_ARGS="$SMOKE_ARGS $arg"
+    done
+    rcmd "python3 -m scripts.run_smoke_test $SMOKE_ARGS"
     ;;
 
 # --- Phase A -----------------------------------------------------------------
