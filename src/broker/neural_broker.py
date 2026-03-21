@@ -1087,6 +1087,15 @@ class NeuralBroker:
         # POST /register
         # ------------------------------------------------------------------
 
+        @app.get("/workers")
+        async def workers() -> dict:
+            """Return registered workers with URLs (for kafka-consumer sidecar)."""
+            async with self._workers_lock:
+                return {
+                    nid: {"url": w.url, "domain_id": w.domain_id, "slice_id": w.slice_id}
+                    for nid, w in self._workers.items()
+                }
+
         @app.post("/register", response_model=RegisterResponse)
         async def register(req: RegisterRequest, request: Request) -> RegisterResponse:
             """Register a worker with this broker.
