@@ -100,16 +100,29 @@ def _build_dag(pipeline_type: str, config: dict) -> PipelineDAG:
 
 
 class BaseBroker(abc.ABC):
-    """Abstract base for baseline brokers (StaticBroker, KafkaBroker).
+    """Abstract base for baseline brokers (StaticBroker, NeuralBroker).
 
     Provides the shared FastAPI application skeleton, worker registry,
-    pipeline tracking, metrics collection, and DAG-walking dispatch logic.
-    Subclasses must implement ``_compute_placement`` and ``_dispatch_stage``.
+    pipeline tracking, metrics collection, DAG-walking dispatch logic,
+    and dual-transport stage dispatch (HTTP or Kafka).
+
+    Subclasses must implement ``_compute_placement``. The ``_dispatch_stage``
+    method is concrete and switches between HTTP and Kafka based on the
+    ``transport`` parameter.
     """
 
-    def __init__(self, domain_id: str, broker_id: str) -> None:
+    def __init__(
+        self,
+        domain_id: str,
+        broker_id: str,
+        *,
+        transport: str = "http",
+        kafka_bootstrap: str | None = None,
+    ) -> None:
         self.domain_id = domain_id
         self.broker_id = broker_id
+        self.transport = transport
+        self.kafka_bootstrap = kafka_bootstrap
 
         self._workers: dict[str, WorkerInfo] = {}
         self._workers_lock = asyncio.Lock()
@@ -119,6 +132,7 @@ class BaseBroker(abc.ABC):
 
         self._metrics = MetricsCollector()
         self._http_client: httpx.AsyncClient | None = None
+        self._producer = None  # AIOKafkaProducer (created at startup if transport=kafka)
 
     # ------------------------------------------------------------------
     # Abstract methods
@@ -135,14 +149,80 @@ class BaseBroker(abc.ABC):
             Mapping from stage_id to target identifier.
         """
 
-    @abc.abstractmethod
+    # ------------------------------------------------------------------
+    # Dual-transport dispatch (concrete)
+    # ------------------------------------------------------------------
+
     async def _dispatch_stage(self, ps: PipelineState, stage_id: str) -> None:
         """Dispatch a single stage to its assigned target.
 
-        Args:
-            ps: The owning pipeline's state.
-            stage_id: The stage to dispatch.
+        Uses HTTP or Kafka transport depending on ``self.transport``.
         """
+        node_id = ps.placement[stage_id]
+        worker = self._workers.get(node_id)
+        if worker is None:
+            async with self._pipelines_lock:
+                ps.failed = True
+                ps.error = f"Worker '{node_id}' not registered."
+                self._active_pipelines.pop(ps.pipeline_id, None)
+            await self._metrics.complete_pipeline(
+                ps.pipeline_id, success=False, error=ps.error
+            )
+            return
+
+        stage = ps.dag.get_stage(stage_id)
+
+        await self._metrics.record(
+            TimestampRecord(
+                pipeline_id=ps.pipeline_id,
+                stage_id=stage_id,
+                event="dispatched",
+                timestamp=time.time(),
+                node_id=node_id,
+                metadata={"pipeline_type": ps.pipeline_type},
+            )
+        )
+
+        payload = {
+            "pipeline_id": ps.pipeline_id,
+            "stage_id": stage_id,
+            "stage_type": stage.stage_type,
+            "computational_demand": stage.computational_demand,
+            "input_data": "",
+            "metadata": {"broker_id": self.broker_id, "pipeline_type": ps.pipeline_type},
+        }
+
+        if self.transport == "kafka":
+            # Kafka transport: publish with placement embedded
+            payload["target_worker"] = node_id
+            payload["target_url"] = worker.url
+            topic = ps.pipeline_type
+            try:
+                await self._producer.send_and_wait(topic, value=payload)
+            except Exception as exc:
+                logger.error("Kafka publish failed for stage '%s': %s", stage_id, exc)
+                async with self._pipelines_lock:
+                    ps.failed = True
+                    ps.error = f"Kafka publish failed for stage '{stage_id}': {exc}"
+                    self._active_pipelines.pop(ps.pipeline_id, None)
+                await self._metrics.complete_pipeline(
+                    ps.pipeline_id, success=False, error=ps.error
+                )
+        else:
+            # HTTP transport: direct POST to worker
+            url = f"{worker.url.rstrip('/')}/execute"
+            try:
+                resp = await self._http_client.post(url, json=payload, timeout=30.0)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("Dispatch of stage '%s' to '%s' failed: %s", stage_id, node_id, exc)
+                async with self._pipelines_lock:
+                    ps.failed = True
+                    ps.error = f"Dispatch failed for stage '{stage_id}': {exc}"
+                    self._active_pipelines.pop(ps.pipeline_id, None)
+                await self._metrics.complete_pipeline(
+                    ps.pipeline_id, success=False, error=ps.error
+                )
 
     # ------------------------------------------------------------------
     # DAG walking (shared)
@@ -273,6 +353,15 @@ class BaseBroker(abc.ABC):
         @app.on_event("startup")
         async def _startup() -> None:
             broker._http_client = httpx.AsyncClient()
+            if broker.transport == "kafka" and broker.kafka_bootstrap:
+                import json as _json
+                from aiokafka import AIOKafkaProducer
+                broker._producer = AIOKafkaProducer(
+                    bootstrap_servers=broker.kafka_bootstrap,
+                    value_serializer=lambda v: _json.dumps(v).encode("utf-8"),
+                )
+                await broker._producer.start()
+                logger.info("Kafka producer started (bootstrap=%s).", broker.kafka_bootstrap)
             # Periodic partial CSV export for crash resilience
             broker._snapshot_task = asyncio.create_task(broker._periodic_snapshot())
 
@@ -280,6 +369,9 @@ class BaseBroker(abc.ABC):
         async def _shutdown() -> None:
             if hasattr(broker, '_snapshot_task'):
                 broker._snapshot_task.cancel()
+            if broker._producer is not None:
+                await broker._producer.stop()
+                broker._producer = None
             if broker._http_client is not None:
                 await broker._http_client.aclose()
 
