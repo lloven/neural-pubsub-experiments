@@ -37,7 +37,104 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.local.yaml"
+COMPOSE_KAFKA = PROJECT_ROOT / "docker-compose.kafka.yaml"
+COMPOSE_FLAT = PROJECT_ROOT / "docker-compose.flat.yaml"
+COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
 DEFAULT_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]
+
+# Rate label → numeric arrival rate (events/second)
+RATE_MAP: dict[str, float] = {
+    "low": 2.0,
+    "medium": 5.0,
+    "high": 10.0,
+}
+
+
+# ---------------------------------------------------------------------------
+# Config resolution (unified mapping from config name → compose + env)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ResolvedConfig:
+    """Result of resolving a config name to compose files and env vars."""
+    compose_files: list[Path]
+    env: dict[str, str]
+
+    # Optional broker module override (informational; already encoded in env)
+    broker_module: str | None = None
+
+
+# Config name → (extra compose overlays, env overrides, broker_module)
+_CONFIG_TABLE: dict[str, dict] = {
+    # Phase A
+    "A1": {"overlays": [COMPOSE_KAFKA], "env": {}, "broker": None},
+    "A2": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
+    "A3": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "random"}, "broker": "src.broker.static_broker"},
+    "A4": {"overlays": [], "env": {}, "broker": None},
+    # Phase B
+    "B1": {"overlays": [COMPOSE_FLAT], "env": {}, "broker": None},
+    "B2": {"overlays": [], "env": {}, "broker": None},
+    "B3": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
+    "B4": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
+    # Phase C (future)
+    "C1": {"overlays": [], "env": {}, "broker": None},
+    "C2": {"overlays": [], "env": {}, "broker": None},
+    "C3": {"overlays": [], "env": {}, "broker": None},
+    "C4": {"overlays": [], "env": {}, "broker": None},
+    # Phase D (future)
+    "D1": {"overlays": [], "env": {}, "broker": None},
+    "D2": {"overlays": [], "env": {}, "broker": None},
+    "D3": {"overlays": [], "env": {}, "broker": None},
+    "D4": {"overlays": [], "env": {}, "broker": None},
+}
+
+
+def resolve_config(
+    config_name: str,
+    rate: str = "medium",
+    stages: int = 3,
+    seed: int = 42,
+) -> ResolvedConfig:
+    """Resolve a config name (e.g. 'A1', 'B3') to compose files and env vars.
+
+    Args:
+        config_name: Experiment configuration identifier (A1-A4, B1-B4, etc.).
+        rate: Workload rate label ('low', 'medium', 'high').
+        stages: Pipeline complexity (number of stages).
+        seed: Random seed for the run.
+
+    Returns:
+        A ResolvedConfig with compose_files list and env dict.
+
+    Raises:
+        ValueError: If config_name is not recognised.
+    """
+    if config_name not in _CONFIG_TABLE:
+        raise ValueError(
+            f"Unknown config: {config_name}. "
+            f"Valid: {sorted(_CONFIG_TABLE.keys())}"
+        )
+
+    entry = _CONFIG_TABLE[config_name]
+    compose_files = [COMPOSE_FILE] + list(entry["overlays"])
+
+    if rate in RATE_MAP:
+        arrival_rate = RATE_MAP[rate]
+    else:
+        arrival_rate = float(rate)
+
+    env: dict[str, str] = {
+        "ARRIVAL_RATE": str(arrival_rate),
+        "SEED": str(seed),
+        "PIPELINE_STAGES": str(stages),
+        **entry["env"],
+    }
+
+    return ResolvedConfig(
+        compose_files=compose_files,
+        env=env,
+        broker_module=entry["broker"],
+    )
 
 
 def shuffle_configs(configs: list, seed: int = 42) -> list:
