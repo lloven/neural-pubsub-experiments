@@ -292,3 +292,88 @@ class TestStaticBrokerNoDispatchOverride:
         assert StaticBroker._dispatch_stage is BaseBroker._dispatch_stage, (
             "StaticBroker should inherit _dispatch_stage from BaseBroker, not override it."
         )
+
+
+# ===========================================================================
+# Task 3: NeuralBroker Dual-Transport
+# ===========================================================================
+
+
+class TestNeuralBrokerTransport:
+    """NeuralBroker must support transport='http' and transport='kafka'."""
+
+    def test_broker_config_has_transport_field(self):
+        """BrokerConfig must accept transport and kafka_bootstrap."""
+        from src.broker.neural_broker import BrokerConfig
+
+        cfg = BrokerConfig(
+            domain_id="d1", broker_id="b1",
+            transport="kafka", kafka_bootstrap="kafka:9092",
+        )
+        assert cfg.transport == "kafka"
+        assert cfg.kafka_bootstrap == "kafka:9092"
+
+    def test_broker_config_default_transport_http(self):
+        """BrokerConfig default transport is 'http'."""
+        from src.broker.neural_broker import BrokerConfig
+
+        cfg = BrokerConfig(domain_id="d1", broker_id="b1")
+        assert cfg.transport == "http"
+
+    def test_neural_broker_has_send_to_worker_helper(self):
+        """NeuralBroker must have a _send_to_worker method that switches on transport."""
+        from src.broker.neural_broker import NeuralBroker, BrokerConfig
+
+        cfg = BrokerConfig(domain_id="d1", broker_id="b1", transport="http")
+        broker = NeuralBroker(cfg)
+        assert hasattr(broker, "_send_to_worker"), (
+            "NeuralBroker must have _send_to_worker helper for dual-transport dispatch"
+        )
+
+    def test_send_to_worker_http_posts_directly(self):
+        """_send_to_worker with transport='http' POSTs to worker URL."""
+        from src.broker.neural_broker import NeuralBroker, BrokerConfig
+
+        cfg = BrokerConfig(domain_id="d1", broker_id="b1", transport="http")
+        broker = NeuralBroker(cfg)
+
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.post.return_value = mock_resp
+        broker._http_client = mock_client
+
+        payload = {"pipeline_id": "p1", "stage_id": "s1", "stage_type": "predict"}
+
+        asyncio.run(broker._send_to_worker("http://worker:8081", payload))
+
+        mock_client.post.assert_called_once()
+        assert "worker:8081/execute" in mock_client.post.call_args[0][0]
+
+    def test_send_to_worker_kafka_publishes_with_target(self):
+        """_send_to_worker with transport='kafka' publishes to Kafka."""
+        from src.broker.neural_broker import NeuralBroker, BrokerConfig
+
+        cfg = BrokerConfig(
+            domain_id="d1", broker_id="b1",
+            transport="kafka", kafka_bootstrap="kafka:9092",
+        )
+        broker = NeuralBroker(cfg)
+
+        mock_producer = AsyncMock()
+        broker._producer = mock_producer
+
+        payload = {
+            "pipeline_id": "p1", "stage_id": "s1", "stage_type": "predict",
+            "metadata": {"pipeline_type": "cqi_prediction"},
+        }
+
+        asyncio.run(broker._send_to_worker(
+            "http://worker:8081", payload, worker_id="w1", topic="cqi_prediction",
+        ))
+
+        mock_producer.send_and_wait.assert_called_once()
+        call_args = mock_producer.send_and_wait.call_args
+        sent_msg = call_args[1].get("value") or call_args[0][1]
+        assert sent_msg["target_url"] == "http://worker:8081"
+        assert sent_msg["target_worker"] == "w1"
