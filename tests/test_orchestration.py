@@ -38,16 +38,17 @@ COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
 class TestResolveConfig:
     """Tests 1-9: resolve_config() maps config names to compose files and env."""
 
-    def _resolve(self, config_name: str, rate: str = "medium", stages: int = 3, seed: int = 42):
+    def _resolve(self, config_name: str, rate: str = "medium", stages: int = 3, seed: int = 42, transport: str = "http"):
         from scripts._common import resolve_config
-        return resolve_config(config_name, rate=rate, stages=stages, seed=seed)
+        return resolve_config(config_name, rate=rate, stages=stages, seed=seed, transport=transport)
 
     # --- Compose file resolution ---
 
-    def test_A1_uses_kafka_overlay(self):
-        """Test 1: A1 config uses local + kafka compose files."""
+    def test_A1_is_static_round_robin(self):
+        """Test 1: A1 = static round-robin (renumbered from old A2)."""
         cfg = self._resolve("A1")
-        assert cfg.compose_files == [COMPOSE_LOCAL, COMPOSE_KAFKA]
+        assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
+        assert cfg.env["PLACEMENT"] == "round_robin"
 
     def test_B1_uses_flat_overlay(self):
         """Test 2: B1 config uses local + flat compose files."""
@@ -71,39 +72,45 @@ class TestResolveConfig:
 
     # --- Environment variable resolution ---
 
-    def test_A1_env_has_no_broker_module(self):
-        """Test 6: A1 env does not set BROKER_MODULE (kafka overlay handles it)."""
-        cfg = self._resolve("A1")
-        assert "BROKER_MODULE" not in cfg.env
+    def test_A1_kafka_transport_adds_kafka_overlay(self):
+        """Test 6: A1 with transport='kafka' adds kafka compose overlay."""
+        cfg = self._resolve("A1", transport="kafka")
+        assert COMPOSE_KAFKA in cfg.compose_files
+        assert COMPOSE_LOCAL in cfg.compose_files
 
-    def test_A2_env_has_static_broker_round_robin(self):
-        """Test 7: A2 env sets static broker with round_robin placement."""
-        cfg = self._resolve("A2")
+    def test_A1_http_transport_no_kafka_overlay(self):
+        """Test 6b: A1 with transport='http' does NOT add kafka overlay."""
+        cfg = self._resolve("A1", transport="http")
+        assert COMPOSE_KAFKA not in cfg.compose_files
+
+    def test_A1_env_has_static_broker_round_robin(self):
+        """Test 7: A1 env sets static broker with round_robin placement."""
+        cfg = self._resolve("A1")
         assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
         assert cfg.env["PLACEMENT"] == "round_robin"
 
-    def test_A3_env_has_static_broker_random(self):
-        """Test 8: A3 env sets static broker with random placement."""
-        cfg = self._resolve("A3")
+    def test_A2_env_has_static_broker_random(self):
+        """Test 8: A2 env sets static broker with random placement."""
+        cfg = self._resolve("A2")
         assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
         assert cfg.env["PLACEMENT"] == "random"
 
     def test_rate_mapping(self):
         """Test 9: Rate labels map to correct numeric values."""
         for label, expected in [("low", "2.0"), ("medium", "5.0"), ("high", "10.0")]:
-            cfg = self._resolve("A4", rate=label)
+            cfg = self._resolve("A3", rate=label)
             assert cfg.env["ARRIVAL_RATE"] == expected, f"rate={label} should map to {expected}"
 
     # --- Additional edge cases ---
 
     def test_A4_uses_base_only(self):
         """A4 (neural) uses only the local compose file."""
-        cfg = self._resolve("A4")
+        cfg = self._resolve("A3")
         assert cfg.compose_files == [COMPOSE_LOCAL]
 
     def test_A4_env_has_no_broker_module(self):
         """A4 (neural, default) does not set BROKER_MODULE."""
-        cfg = self._resolve("A4")
+        cfg = self._resolve("A3")
         assert "BROKER_MODULE" not in cfg.env
 
     def test_B2_uses_base_only(self):
@@ -112,8 +119,8 @@ class TestResolveConfig:
         assert cfg.compose_files == [COMPOSE_LOCAL]
 
     def test_C_configs_use_base_only(self):
-        """C1-C4 use only the local compose file (future phases)."""
-        for name in ["C1", "C2", "C3", "C4"]:
+        """C1-C3 use only the local compose file."""
+        for name in ["C1", "C2", "C3"]:
             cfg = self._resolve(name)
             assert cfg.compose_files == [COMPOSE_LOCAL], f"{name} should use base only"
 
@@ -130,12 +137,12 @@ class TestResolveConfig:
 
     def test_seed_in_env(self):
         """Seed is passed through to env."""
-        cfg = self._resolve("A4", seed=999)
+        cfg = self._resolve("A3", seed=999)
         assert cfg.env["SEED"] == "999"
 
     def test_stages_in_env(self):
         """Pipeline stages are passed through to env."""
-        cfg = self._resolve("A4", stages=5)
+        cfg = self._resolve("A3", stages=5)
         assert cfg.env.get("PIPELINE_STAGES") == "5" or "DURATION_S" in cfg.env
 
 

@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Phase A: Single-site baselines.
+"""Phase A: Single-site baselines (dual-transport factorial).
 
-Runs 4 configurations on a single domain (no federation):
-  A1 -- Kafka + static topic routing (centralised broker baseline)
-  A2 -- Static placement (fixed pipeline-to-node mapping)
+Runs 3 placement strategies × 2 transports on a single domain (no federation):
+  A2 -- Static round-robin placement
   A3 -- Random placement (lower bound)
   A4 -- Neural Pub/Sub (single broker, dynamic semantic routing)
 
-Per configuration:
-  5 seeds x 3 workload rates (low/medium/high) x 3 pipeline complexities
-  (2/3/5 stages). Each run: 10-min warm-up, 30-min measurement window.
+Each runs under both HTTP and Kafka transport, creating a 3×2 factorial.
+
+Per cell: 5 seeds × 3 rates (low/medium/high) × 1 complexity (3 stages).
+  Each run: 10-min warm-up, 30-min measurement window.
 
 Outputs CSV results to results/phase_a/.
 
 Usage:
     python scripts/run_phase_a.py [--dry-run] [--seeds 42,123,456,789,0]
     python scripts/run_phase_a.py --configs A4 --rates medium --seeds 42
+    python scripts/run_phase_a.py --transports kafka --configs A2,A3,A4
 """
 
 from __future__ import annotations
@@ -27,12 +28,13 @@ from pathlib import Path
 
 from scripts._common import (
     COMPOSE_FILE,
+    COMPOSE_KAFKA,
     PROJECT_ROOT,
+    TRANSPORTS,
     phase_main,
+    resolve_config,
     run_single,
 )
-
-KAFKA_COMPOSE_FILE = PROJECT_ROOT / "docker-compose.kafka.yaml"
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +54,11 @@ COMPLEXITIES = {
     5: {"cqi_prediction": 0.0, "anomaly_detection": 0.0, "sensor_fusion": 1.0},
 }
 
-# Config definitions
+# Config definitions (renumbered: A1=round-robin, A2=random, A3=neural)
 CONFIGS = {
-    "A1": {"placement_strategy": "kafka"},
-    "A2": {"placement_strategy": "static"},
-    "A3": {"placement_strategy": "random"},
-    "A4": {"placement_strategy": "neural"},
+    "A1": {"placement_strategy": "static"},
+    "A2": {"placement_strategy": "random"},
+    "A3": {"placement_strategy": "neural"},
 }
 
 
@@ -69,13 +70,14 @@ class RunConfig:
     arrival_rate: float
     pipeline_complexity: int
     seed: int
+    transport: str = "http"
     warmup_s: int = 600
     measurement_s: int = 1800
     placement_strategy: str = "neural"
 
     @property
     def run_id(self) -> str:
-        return f"{self.config_name}_rate-{self.rate_label}_stages-{self.pipeline_complexity}_seed-{self.seed}"
+        return f"{self.config_name}_{self.transport}_rate-{self.rate_label}_stages-{self.pipeline_complexity}_seed-{self.seed}"
 
 
 def _add_extra_args(parser):
@@ -84,18 +86,26 @@ def _add_extra_args(parser):
         help="Comma-separated rate labels (default: low,medium,high)",
     )
     parser.add_argument(
-        "--complexities", default="2,3,5",
-        help="Comma-separated pipeline stage counts (default: 2,3,5)",
+        "--complexities", default="3",
+        help="Comma-separated pipeline stage counts (default: 3)",
+    )
+    parser.add_argument(
+        "--transports", default="http,kafka",
+        help="Comma-separated transport modes (default: http,kafka)",
     )
 
 
 def _parse_extra(args):
     rates = [r.strip() for r in args.rates.split(",")]
     complexities = [int(c.strip()) for c in args.complexities.split(",")]
+    transports = [t.strip() for t in args.transports.split(",")]
     for r in rates:
         if r not in RATES:
             raise SystemExit(f"Unknown rate: {r}. Valid: {list(RATES.keys())}")
-    return {"rates": rates, "complexities": complexities}
+    for t in transports:
+        if t not in TRANSPORTS:
+            raise SystemExit(f"Unknown transport: {t}. Valid: {TRANSPORTS}")
+    return {"rates": rates, "complexities": complexities, "transports": transports}
 
 
 def build_run_matrix(
@@ -103,15 +113,18 @@ def build_run_matrix(
     seeds: list[int],
     rates: list[str] | None = None,
     complexities: list[int] | None = None,
+    transports: list[str] | None = None,
 ) -> list[RunConfig]:
-    """Build the full combinatorial run matrix."""
+    """Build the full combinatorial run matrix (placement × transport × rate × seed)."""
     if rates is None:
         rates = list(RATES.keys())
     if complexities is None:
         complexities = list(COMPLEXITIES.keys())
+    if transports is None:
+        transports = TRANSPORTS
     runs = []
-    for config_name, rate_label, complexity, seed in itertools.product(
-        configs, rates, complexities, seeds,
+    for config_name, transport, rate_label, complexity, seed in itertools.product(
+        configs, transports, rates, complexities, seeds,
     ):
         cfg = CONFIGS[config_name]
         runs.append(RunConfig(
@@ -120,27 +133,31 @@ def build_run_matrix(
             arrival_rate=RATES[rate_label],
             pipeline_complexity=complexity,
             seed=seed,
+            transport=transport,
             placement_strategy=cfg["placement_strategy"],
         ))
     return runs
 
 
 def _run(run: RunConfig, dry_run: bool) -> dict:
-    run_id = (
-        f"{run.config_name}_rate-{run.rate_label}_"
-        f"stages-{run.pipeline_complexity}_seed-{run.seed}"
-    )
+    run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     mix = COMPLEXITIES[run.pipeline_complexity]
 
     logger.info(
-        "Run: %s (rate=%.1f, stages=%d, seed=%d, strategy=%s, duration=%ds)",
+        "Run: %s (rate=%.1f, stages=%d, seed=%d, strategy=%s, transport=%s, duration=%ds)",
         run_id, run.arrival_rate, run.pipeline_complexity, run.seed,
-        run.placement_strategy, total_duration,
+        run.placement_strategy, run.transport, total_duration,
+    )
+
+    # Use resolve_config for compose files (handles transport overlay)
+    resolved = resolve_config(
+        run.config_name, rate=run.rate_label, stages=run.pipeline_complexity,
+        seed=run.seed, transport=run.transport,
     )
 
     env = {
-        "PLACEMENT_STRATEGY": run.placement_strategy,
+        **resolved.env,
         "ARRIVAL_RATE": str(run.arrival_rate),
         "DURATION_S": str(total_duration),
         "SEED": str(run.seed),
@@ -150,19 +167,7 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         "WARMUP_S": str(run.warmup_s),
     }
 
-    # A1 (Kafka): use kafka_broker via docker-compose.kafka.yaml overlay
-    # A2 (static): use static_broker with round_robin placement
-    # A3 (random): use static_broker with random placement
-    # A4 (neural): use neural_broker (default)
-    compose_files = None
-    if run.placement_strategy == "kafka":
-        compose_files = [COMPOSE_FILE, KAFKA_COMPOSE_FILE]
-    elif run.placement_strategy == "static":
-        env["BROKER_MODULE"] = "src.broker.static_broker"
-        env["PLACEMENT"] = "round_robin"
-    elif run.placement_strategy == "random":
-        env["BROKER_MODULE"] = "src.broker.static_broker"
-        env["PLACEMENT"] = "random"
+    compose_files = resolved.compose_files
 
     return run_single(
         run_id=run_id,

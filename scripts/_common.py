@@ -65,24 +65,28 @@ class ResolvedConfig:
     broker_module: str | None = None
 
 
-# Config name → (extra compose overlays, env overrides, broker_module)
+# Transport modes for the factorial experiment.
+TRANSPORTS = ["http", "kafka"]
+
+# Config name → (extra compose overlays, env overrides, broker_module).
+# Renumbered in dual-transport refactor (2026-03-21): A1=round-robin,
+# A2=random, A3=neural (old A1/Kafka-only dropped, old A2-A4 shifted).
+# All baselines run under both http and kafka transport (factorial design).
 _CONFIG_TABLE: dict[str, dict] = {
-    # Phase A
-    "A1": {"overlays": [COMPOSE_KAFKA], "env": {}, "broker": None},
-    "A2": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
-    "A3": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "random"}, "broker": "src.broker.static_broker"},
-    "A4": {"overlays": [], "env": {}, "broker": None},
-    # Phase B
+    # Phase A: single-site baselines (3 placements × 2 transports)
+    "A1": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
+    "A2": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "random"}, "broker": "src.broker.static_broker"},
+    "A3": {"overlays": [], "env": {}, "broker": None},
+    # Phase B: slice-aware placement (4 configs × 2 transports)
     "B1": {"overlays": [COMPOSE_FLAT], "env": {}, "broker": None},
     "B2": {"overlays": [], "env": {}, "broker": None},
     "B3": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
     "B4": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
-    # Phase C (future)
+    # Phase C: cross-site federation (3 configs × 2 transports)
     "C1": {"overlays": [], "env": {}, "broker": None},
     "C2": {"overlays": [], "env": {}, "broker": None},
     "C3": {"overlays": [], "env": {}, "broker": None},
-    "C4": {"overlays": [], "env": {}, "broker": None},
-    # Phase D (future)
+    # Phase D: failure resilience (4 configs × 2 transports)
     "D1": {"overlays": [], "env": {}, "broker": None},
     "D2": {"overlays": [], "env": {}, "broker": None},
     "D3": {"overlays": [], "env": {}, "broker": None},
@@ -95,14 +99,16 @@ def resolve_config(
     rate: str = "medium",
     stages: int = 3,
     seed: int = 42,
+    transport: str = "http",
 ) -> ResolvedConfig:
-    """Resolve a config name (e.g. 'A1', 'B3') to compose files and env vars.
+    """Resolve a config name (e.g. 'A2', 'B3') to compose files and env vars.
 
     Args:
-        config_name: Experiment configuration identifier (A1-A4, B1-B4, etc.).
+        config_name: Experiment configuration identifier (A2-A4, B1-B4, etc.).
         rate: Workload rate label ('low', 'medium', 'high').
         stages: Pipeline complexity (number of stages).
         seed: Random seed for the run.
+        transport: Dispatch transport mode ('http' or 'kafka').
 
     Returns:
         A ResolvedConfig with compose_files list and env dict.
@@ -118,6 +124,10 @@ def resolve_config(
 
     entry = _CONFIG_TABLE[config_name]
     compose_files = [COMPOSE_FILE] + list(entry["overlays"])
+
+    # Kafka transport: add the Kafka overlay
+    if transport == "kafka":
+        compose_files.append(COMPOSE_KAFKA)
 
     if rate in RATE_MAP:
         arrival_rate = RATE_MAP[rate]
