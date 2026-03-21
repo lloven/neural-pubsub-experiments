@@ -91,7 +91,7 @@ sync_host() {
     local host="$1" dir="$2" git_remote="$3"
     local local_head remote_head
 
-    if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]]; then
+    if ! git -C "$PROJECT_DIR" diff --quiet HEAD 2>/dev/null || [[ -n "$(git -C "$PROJECT_DIR" diff --cached --name-only)" ]]; then
         warn "Local repo has uncommitted changes. Commit or stash first."
         warn "Continuing anyway (remote may be out of date)."
     fi
