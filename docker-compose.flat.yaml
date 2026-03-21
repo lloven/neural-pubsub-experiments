@@ -1,0 +1,90 @@
+# =============================================================================
+# Overlay: Flat single-slice topology (Phase B1 — no slice isolation).
+#
+# Merges on top of docker-compose.local.yaml.  Removes the per-slice
+# internal networks and replaces them with a single "slice-flat" network.
+# Removes broker-d2 and domain-2 workers (B1 is single-domain).
+# All domain-1 workers join the flat network with --slice flat.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml -f docker-compose.flat.yaml up
+# =============================================================================
+
+services:
+
+  # --- Remove domain 2 entirely (scale to 0) --------------------------------
+  broker-d2:
+    deploy:
+      replicas: 0
+
+  worker-d2-embb-1:
+    deploy:
+      replicas: 0
+
+  worker-d2-embb-2:
+    deploy:
+      replicas: 0
+
+  # --- Broker D1: single flat network + federation --------------------------
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+    networks:
+      - slice-flat
+      - federation
+    dns_opt:
+      - ndots:0
+
+  # --- Workers: all on flat network with --slice flat -----------------------
+  worker-d1-urllc-1:
+    command: >
+      -m src.worker
+      --node-id d1-urllc-1
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  worker-d1-urllc-2:
+    command: >
+      -m src.worker
+      --node-id d1-urllc-2
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  worker-d1-embb-1:
+    command: >
+      -m src.worker
+      --node-id d1-embb-1
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 2.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  workload:
+    dns_opt:
+      - ndots:0
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+
+networks:
+  slice-flat:
+    internal: true

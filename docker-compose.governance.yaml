@@ -1,0 +1,35 @@
+# =============================================================================
+# Overlay: Enable governance constraints on brokers (Phase B3/B4).
+#
+# Merges on top of docker-compose.local.yaml.  Appends --governance-enabled
+# to both broker commands so that placement enforces data-sovereignty and
+# trust-level constraints from the governance policy.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml \
+#                  -f docker-compose.governance.yaml up
+# =============================================================================
+
+services:
+
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers http://broker-d2:8080
+      --governance-enabled
+    dns_opt:
+      - ndots:0
+
+  broker-d2:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d2
+      --broker-id broker-d2
+      --port 8080
+      --peers http://broker-d1:8080
+      --governance-enabled
+    dns_opt:
+      - ndots:0

@@ -50,7 +50,20 @@ def mini_bar(fraction: float, width: int = 15) -> str:
     return f"[{bar}]"
 
 
-def load_progress(results_dir: Path) -> dict:
+def load_progress(results_dir: Path, remote_host: str | None = None) -> dict:
+    if remote_host:
+        pf = str(results_dir / ".progress.json")
+        try:
+            result = subprocess.run(
+                ["ssh", remote_host, "cat", pf],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
+        except (json.JSONDecodeError, OSError, subprocess.TimeoutExpired):
+            pass
+        return {}
+
     pf = results_dir / ".progress.json"
     if pf.exists():
         try:
@@ -60,8 +73,22 @@ def load_progress(results_dir: Path) -> dict:
     return {}
 
 
-def count_csv_rows(csv_path: Path) -> int:
+def count_csv_rows(csv_path: Path, remote_host: str | None = None) -> int:
     """Count data rows in a CSV file (excluding header)."""
+    if remote_host:
+        try:
+            result = subprocess.run(
+                ["ssh", remote_host, "wc", "-l", str(csv_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                # wc -l returns "<count> <path>"; subtract 1 for header
+                count = int(result.stdout.strip().split()[0])
+                return max(0, count - 1)
+        except Exception:
+            pass
+        return 0
+
     if not csv_path.exists():
         return 0
     try:
@@ -73,13 +100,23 @@ def count_csv_rows(csv_path: Path) -> int:
         return 0
 
 
-def get_docker_containers() -> list[dict]:
-    """Get running Docker containers with status."""
+def get_docker_containers(remote_host: str | None = None) -> list[dict]:
+    """Get running Docker containers with status.
+
+    Args:
+        remote_host: If set, run ``docker ps`` on this SSH host instead of
+            locally.
+    """
     try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"],
-            capture_output=True, text=True, timeout=5,
-        )
+        if remote_host:
+            cmd = [
+                "ssh", remote_host,
+                "docker", "ps", "--format", "{{.Names}}\t{{.Status}}",
+            ]
+        else:
+            cmd = ["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         containers = []
         for line in result.stdout.strip().split("\n"):
             if not line:
@@ -113,10 +150,10 @@ def get_run_pipelines(results_dir: Path, run_id: str) -> tuple[int, int]:
     return partial_count, final_count
 
 
-def render(results_dir: Path, progress: dict):
+def render(results_dir: Path, progress: dict, remote_host: str | None = None):
     """Render the dashboard."""
     now = time.time()
-    containers = get_docker_containers()
+    containers = get_docker_containers(remote_host=remote_host)
 
     # Categorize runs
     runs_queued = []
@@ -235,7 +272,7 @@ def render(results_dir: Path, progress: dict):
             if detail:
                 # Count rows in final CSV
                 final_path = Path(detail)
-                rows = count_csv_rows(final_path)
+                rows = count_csv_rows(final_path, remote_host=remote_host)
                 print(f"    {run_id}: {rows} pipelines")
             else:
                 print(f"    {run_id}")
@@ -291,16 +328,32 @@ def render(results_dir: Path, progress: dict):
         print("  Docker: no containers running")
 
     # Result files
-    csv_files = sorted(results_dir.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
-    csv_files = [f for f in csv_files if not f.name.startswith(".") and "summary" not in f.name]
-    if csv_files:
-        print()
-        print("  Recent result files:")
-        for f in csv_files[:5]:
-            size = f.stat().st_size
-            rows = count_csv_rows(f)
-            size_str = f"{size / 1024:.0f}KB" if size > 1024 else f"{size}B"
-            print(f"    {f.name}  ({rows} rows, {size_str})")
+    if remote_host:
+        try:
+            result = subprocess.run(
+                ["ssh", remote_host, f"ls -t {results_dir}/*.csv 2>/dev/null | head -5"],
+                capture_output=True, text=True, timeout=10,
+            )
+            csv_names = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+            if csv_names:
+                print()
+                print("  Recent result files:")
+                for name in csv_names[:5]:
+                    rows = count_csv_rows(Path(name), remote_host=remote_host)
+                    print(f"    {Path(name).name}  ({rows} rows)")
+        except Exception:
+            pass
+    else:
+        csv_files = sorted(results_dir.glob("*.csv"), key=lambda f: f.stat().st_mtime, reverse=True)
+        csv_files = [f for f in csv_files if not f.name.startswith(".") and "summary" not in f.name]
+        if csv_files:
+            print()
+            print("  Recent result files:")
+            for f in csv_files[:5]:
+                size = f.stat().st_size
+                rows = count_csv_rows(f)
+                size_str = f"{size / 1024:.0f}KB" if size > 1024 else f"{size}B"
+                print(f"    {f.name}  ({rows} rows, {size_str})")
 
     print()
     print("  Ctrl+C to stop monitoring (experiment continues in background)")
@@ -313,24 +366,35 @@ def main():
     parser.add_argument("results_dir", nargs="?", default="results/phase_a",
                         help="Results directory to monitor (default: results/phase_a)")
     parser.add_argument("--interval", type=int, default=5, help="Refresh interval in seconds")
+    parser.add_argument("--remote", metavar="HOST", default=None,
+                        help="Monitor experiments running on a remote SSH host. "
+                             "The results_dir path is interpreted on the remote host.")
     args = parser.parse_args()
 
-    results_dir = PROJECT_ROOT / args.results_dir
+    remote_host = args.remote
 
-    if not results_dir.exists():
-        print(f"Results directory not found: {results_dir}")
-        print("Waiting for experiments to start...")
-        while not results_dir.exists():
-            time.sleep(2)
+    if remote_host:
+        # For remote mode, use the path as-is (it refers to the remote filesystem)
+        results_dir = Path(args.results_dir)
+    else:
+        results_dir = PROJECT_ROOT / args.results_dir
+
+    if not remote_host:
+        if not results_dir.exists():
+            print(f"Results directory not found: {results_dir}")
+            print("Waiting for experiments to start...")
+            while not results_dir.exists():
+                time.sleep(2)
 
     try:
         while True:
-            progress = load_progress(results_dir)
+            progress = load_progress(results_dir, remote_host=remote_host)
             if progress:
-                render(results_dir, progress)
+                render(results_dir, progress, remote_host=remote_host)
             else:
                 sys.stdout.write("\033[2J\033[H")
-                print(f"  Waiting for experiments to start in {results_dir}...")
+                host_label = f" on {remote_host}" if remote_host else ""
+                print(f"  Waiting for experiments to start in {results_dir}{host_label}...")
                 print(f"  No .progress.json found yet.")
 
             # Check if all done
@@ -338,7 +402,7 @@ def main():
                 info.get("status") in ("done", "failed", "no_output")
                 for info in progress.values()
             ):
-                render(results_dir, progress)
+                render(results_dir, progress, remote_host=remote_host)
                 print("  \u2728 All runs complete!")
                 break
 

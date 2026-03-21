@@ -106,6 +106,7 @@ class BrokerConfig:
     health_check_interval_s: float = 5.0
     health_check_max_failures: int = 3
     # Governance
+    governance_enabled: bool = False
     local_stage_types: list[str] = field(default_factory=list)
     trust_levels: dict[str, float] = field(default_factory=dict)
 
@@ -211,14 +212,21 @@ class NeuralBroker:
         # Network topology (rebuilt on each worker register/deregister)
         self._topology: NetworkTopology = NetworkTopology(nodes=[], latency_matrix={})
 
-        # Governance policy derived from config
-        self._governance = GovernancePolicy(
-            local_stage_types=set(config.local_stage_types),
-            trust_levels={
-                (config.domain_id, peer): level
-                for peer, level in config.trust_levels.items()
-            },
-        )
+        # Governance policy derived from config.  When governance is disabled
+        # (the default), use an empty policy so placement ignores constraints.
+        if config.governance_enabled:
+            self._governance = GovernancePolicy(
+                local_stage_types=set(config.local_stage_types),
+                trust_levels={
+                    (config.domain_id, peer): level
+                    for peer, level in config.trust_levels.items()
+                },
+            )
+        else:
+            self._governance = GovernancePolicy(
+                local_stage_types=set(),
+                trust_levels={},
+            )
 
         # Active pipelines: pipeline_id -> PipelineState
         self._active_pipelines: dict[str, PipelineState] = {}
@@ -1443,6 +1451,12 @@ def _parse_args() -> argparse.Namespace:
         help="Summary propagation interval in seconds (delta_prop).",
     )
     parser.add_argument(
+        "--governance-enabled",
+        action="store_true",
+        default=False,
+        help="Enable governance constraints on placement.",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -1475,6 +1489,7 @@ def _make_config_from_args(args: argparse.Namespace) -> BrokerConfig:
     if args.peers:
         cfg.peer_urls = args.peers
     cfg.summary_interval_s = args.summary_interval_s
+    cfg.governance_enabled = args.governance_enabled
 
     return cfg
 
