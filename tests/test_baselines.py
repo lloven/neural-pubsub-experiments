@@ -265,81 +265,11 @@ async def test_kafka_broker_placement_all_pipeline_types():
 
 
 # ---------------------------------------------------------------------------
-# KafkaBroker: consumer dispatch
+# KafkaBroker: consumer dispatch (sidecar)
+#
+# The Kafka consumer now runs as a separate sidecar container
+# (src/broker/kafka_consumer.py). The old in-process consumer was removed
+# because asyncio.create_task doesn't reliably schedule under Docker CE's
+# uvicorn event loop. Sidecar integration is tested via Docker smoke tests
+# (./run-experiments.sh single A1 low 3 42).
 # ---------------------------------------------------------------------------
-
-
-def _make_kafka_message(pipeline_id: str, stage_id: str, stage_type: str = "predict") -> MagicMock:
-    """Create a mock Kafka message matching the KafkaBroker produce format."""
-    msg = MagicMock()
-    msg.value = json.dumps({
-        "pipeline_id": pipeline_id,
-        "stage_id": stage_id,
-        "stage_type": stage_type,
-        "computational_demand": 0.5,
-        "input_data": "",
-        "metadata": {"broker_id": "kafka-test", "pipeline_type": "cqi_prediction"},
-    }).encode("utf-8")
-    msg.topic = "cqi_prediction"
-    return msg
-
-
-@pytest.mark.asyncio
-async def test_kafka_broker_consumer_dispatches_to_worker():
-    """KafkaBroker consumes a Kafka message and HTTP-dispatches it to a worker."""
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-    await _register_workers(broker, 2)
-
-    # Mock HTTP client to capture the dispatch call
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    broker._http_client = mock_http
-
-    msg = _make_kafka_message("test-pipe-1", "stage_0")
-    await broker._dispatch_from_kafka_message(msg)
-
-    # Verify HTTP POST was made to a worker's /execute endpoint
-    mock_http.post.assert_called_once()
-    call_args = mock_http.post.call_args
-    assert "/execute" in call_args[0][0]
-    payload = call_args[1]["json"]
-    assert payload["pipeline_id"] == "test-pipe-1"
-    assert payload["stage_id"] == "stage_0"
-
-
-@pytest.mark.asyncio
-async def test_kafka_broker_consumer_round_robins_workers():
-    """KafkaBroker distributes consumed messages across workers round-robin."""
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-    await _register_workers(broker, 3)
-
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    broker._http_client = mock_http
-
-    # Dispatch 6 messages: should hit each of 3 workers twice
-    for i in range(6):
-        msg = _make_kafka_message(f"pipe-{i}", f"stage_{i}")
-        await broker._dispatch_from_kafka_message(msg)
-
-    assert mock_http.post.call_count == 6
-    urls = [call[0][0] for call in mock_http.post.call_args_list]
-    url_counts = Counter(urls)
-    assert len(url_counts) == 3, f"Expected 3 distinct workers, got {url_counts}"
-    assert all(c == 2 for c in url_counts.values()), f"Expected even distribution, got {url_counts}"
-
-
-@pytest.mark.asyncio
-async def test_kafka_broker_consumer_no_workers_no_crash():
-    """KafkaBroker logs warning and skips dispatch when no workers registered."""
-    broker = KafkaBroker(domain_id="d1", broker_id="kafka-test")
-    # No workers registered
-
-    msg = _make_kafka_message("pipe-0", "stage_0")
-
-    # Should not raise, just skip dispatch
-    await broker._dispatch_from_kafka_message(msg)

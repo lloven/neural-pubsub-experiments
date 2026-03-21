@@ -22,7 +22,10 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
+import os
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -74,6 +77,7 @@ class WorkloadConfig:
     pipeline_mix: dict[str, float]
     broker_url: str
     seed: int = 42
+    warmup_s: float = 0.0
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -153,6 +157,7 @@ class WorkloadGenerator:
         self._run_start: Optional[float] = None
         self._publish_semaphore = asyncio.Semaphore(self._MAX_CONCURRENT_PUBLISHES)
         self._pending_tasks: set[asyncio.Task] = set()
+        self._warmup_pipeline_ids: set[str] = set()
 
         # Validate pipeline_mix keys
         unknown = set(config.pipeline_mix) - set(self._TEMPLATES)
@@ -269,6 +274,11 @@ class WorkloadGenerator:
 
                 request = self.generate_request()
 
+                # Track requests submitted during warmup period
+                warmup_deadline = self._run_start + self.config.warmup_s
+                if self.config.warmup_s > 0 and time.time() < warmup_deadline:
+                    self._warmup_pipeline_ids.add(request.request_id)
+
                 # Fire publish as a background task so that broker response
                 # time does not distort Poisson inter-arrival timing.
                 task = asyncio.create_task(
@@ -303,6 +313,9 @@ class WorkloadGenerator:
                     )
                     if resp.status_code == 200:
                         logger.info("Metrics exported to %s", result_file)
+                        # If warmup was configured, tag rows in the CSV
+                        if self.config.warmup_s > 0 and self._warmup_pipeline_ids:
+                            self._tag_warmup_in_csv(result_file)
                     else:
                         logger.warning("Metrics export failed: HTTP %d", resp.status_code)
             except Exception as e:
@@ -375,6 +388,48 @@ class WorkloadGenerator:
             logger.warning(
                 "Failed to publish request %s: %s", request.request_id, exc
             )
+
+    # ------------------------------------------------------------------
+    # Warmup tagging
+    # ------------------------------------------------------------------
+
+    def _tag_warmup_in_csv(self, csv_path: str) -> None:
+        """Tag rows in the metrics CSV with warmup=True/False.
+
+        Uses ``self._warmup_pipeline_ids`` (populated during the run loop)
+        to identify which pipelines were submitted during the warmup period.
+        """
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames is None:
+                    return
+                fieldnames = list(reader.fieldnames) + ["warmup"]
+                rows = list(reader)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not read CSV for warmup tagging: %s", csv_path)
+            return
+
+        for row in rows:
+            pid = row.get("pipeline_id", "")
+            row["warmup"] = str(pid in self._warmup_pipeline_ids)
+
+        # Write back atomically via temp file
+        dir_name = os.path.dirname(csv_path) or "."
+        try:
+            fd, tmp = tempfile.mkstemp(dir=dir_name, suffix=".csv")
+            with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            os.replace(tmp, csv_path)
+            warmup_count = sum(1 for r in rows if r["warmup"] == "True")
+            logger.info(
+                "Warmup tagging: %d/%d rows tagged as warmup in %s",
+                warmup_count, len(rows), csv_path,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not write warmup-tagged CSV: %s", csv_path)
 
     # ------------------------------------------------------------------
     # Statistics
@@ -489,6 +544,14 @@ def _parse_args():
         dest="result_file",
         help="Path for metrics CSV export at end of run. If empty, no export.",
     )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=0,
+        dest="warmup_s",
+        help="Warmup period in seconds. Pipelines submitted during warmup are "
+             "tagged in the CSV but not counted in steady-state metrics.",
+    )
     return parser.parse_args()
 
 
@@ -499,6 +562,9 @@ def main() -> None:
 
     if args.config:
         cfg = load_config(args.config)
+        # CLI --warmup overrides config file
+        if args.warmup_s > 0:
+            cfg.warmup_s = float(args.warmup_s)
     else:
         metadata = {}
         if args.result_file:
@@ -513,6 +579,7 @@ def main() -> None:
             },
             broker_url=args.broker_url,
             seed=args.seed,
+            warmup_s=float(args.warmup_s),
             metadata=metadata,
         )
 

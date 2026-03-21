@@ -177,6 +177,7 @@ services:
       --duration ${DURATION_S:-60}
       --seed ${SEED:-42}
       --result-file ${RESULT_FILE:-/app/results/metrics.csv}
+      --warmup ${WARMUP_S:-0}
     volumes:
       - ./results:/app/results
     networks:

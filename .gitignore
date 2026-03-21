@@ -11,6 +11,7 @@ results/
 .ruff_cache/
 *.csv
 .env
+.env.local
 .DS_Store
 
 # Internal planning docs (not for public repo)
