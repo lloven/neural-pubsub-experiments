@@ -50,6 +50,38 @@ def mini_bar(fraction: float, width: int = 15) -> str:
     return f"[{bar}]"
 
 
+def _discover_progress_from_csvs(
+    results_dir: Path, remote_host: str | None = None
+) -> dict:
+    """Build a synthetic progress dict from CSV/FAILED files when no .progress.json exists.
+
+    This supports the bash run-experiments.sh runner which doesn't write progress files.
+    """
+    progress = {}
+    try:
+        if remote_host:
+            result = subprocess.run(
+                ["ssh", remote_host, f"ls {results_dir}/*.csv {results_dir}/*.FAILED 2>/dev/null"],
+                capture_output=True, text=True, timeout=10,
+            )
+            files = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        else:
+            files = [str(f) for f in results_dir.glob("*.csv")] + \
+                    [str(f) for f in results_dir.glob("*.FAILED")]
+    except Exception:
+        return {}
+
+    for f in files:
+        name = Path(f).stem
+        if name.startswith("smoke") or name.startswith("."):
+            continue
+        if f.endswith(".FAILED"):
+            progress[name] = {"status": "failed", "timestamp": ""}
+        else:
+            progress[name] = {"status": "done", "timestamp": ""}
+    return progress
+
+
 def load_progress(results_dir: Path, remote_host: str | None = None) -> dict:
     if remote_host:
         pf = str(results_dir / ".progress.json")
@@ -404,13 +436,17 @@ def main():
     try:
         while True:
             progress = load_progress(results_dir, remote_host=remote_host)
+            if not progress:
+                # No .progress.json — build progress from CSV files on disk
+                progress = _discover_progress_from_csvs(results_dir, remote_host=remote_host)
+
             if progress:
                 render(results_dir, progress, remote_host=remote_host)
             else:
                 sys.stdout.write("\033[2J\033[H")
                 host_label = f" on {remote_host}" if remote_host else ""
                 print(f"  Waiting for experiments to start in {results_dir}{host_label}...")
-                print(f"  No .progress.json found yet.")
+                print(f"  No results found yet.")
 
             # Check if all done
             if progress and all(
