@@ -265,9 +265,9 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
         remaining_runs = n_queued + n_running
         eta = avg_time_per_run * remaining_runs
     elif n_running > 0 or n_queued > 0:
-        # Fallback: assume 2400s per run (serial execution)
+        # Fallback: assume 720s per run (120s warmup + 600s measurement)
         remaining_runs = n_queued + n_running
-        eta = remaining_runs * 2400
+        eta = remaining_runs * 720
     else:
         eta = -1
 
@@ -313,14 +313,14 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
             else:
                 container_str = "no containers"
 
-            # Time-based progress bar (each run = 2400s total)
-            run_duration = 2400  # warmup + measurement
+            # Time-based progress bar (each run = 720s total)
+            run_duration = 720  # 120s warmup + 600s measurement
             pct = min(run_elapsed / run_duration, 1.0) if run_elapsed > 0 else 0.0
             bar_len = 20
             filled = int(bar_len * pct)
             bar = "█" * filled + "░" * (bar_len - filled)
             eta_run = max(0, run_duration - run_elapsed)
-            warmup_indicator = " (warmup)" if run_elapsed < 600 else ""
+            warmup_indicator = " (warmup)" if run_elapsed < 120 else ""
 
             print(f"    {run_id}")
             print(f"      [{bar}] {pct*100:4.1f}%  {format_time(run_elapsed)}/{format_time(run_duration)}{warmup_indicator}")
