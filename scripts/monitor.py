@@ -73,7 +73,7 @@ def _discover_progress_from_csvs(
 
     for f in files:
         name = Path(f).stem
-        if name.startswith("smoke") or name.startswith("."):
+        if name.startswith("smoke") or name.startswith(".") or "summary" in name:
             continue
         if f.endswith(".FAILED"):
             progress[name] = {"status": "failed", "timestamp": ""}
@@ -398,6 +398,8 @@ def main():
     parser.add_argument("results_dir", nargs="?", default="results/phase_a",
                         help="Results directory to monitor (default: results/phase_a)")
     parser.add_argument("--interval", type=int, default=5, help="Refresh interval in seconds")
+    parser.add_argument("--once", action="store_true",
+                        help="Print status once and exit (no refresh loop).")
     parser.add_argument("--remote", metavar="HOST", default=None,
                         help="Monitor experiments running on a remote SSH host.")
     parser.add_argument("--remote-dir", metavar="DIR", default=None,
@@ -426,7 +428,9 @@ def main():
     else:
         results_dir = PROJECT_ROOT / args.results_dir
 
-    if not remote_host:
+    once_mode = args.once
+
+    if not remote_host and not once_mode:
         if not results_dir.exists():
             print(f"Results directory not found: {results_dir}")
             print("Waiting for experiments to start...")
@@ -443,10 +447,17 @@ def main():
             if progress:
                 render(results_dir, progress, remote_host=remote_host)
             else:
-                sys.stdout.write("\033[2J\033[H")
-                host_label = f" on {remote_host}" if remote_host else ""
-                print(f"  Waiting for experiments to start in {results_dir}{host_label}...")
-                print(f"  No results found yet.")
+                if once_mode:
+                    print(f"  No results found in {results_dir}")
+                else:
+                    sys.stdout.write("\033[2J\033[H")
+                    host_label = f" on {remote_host}" if remote_host else ""
+                    print(f"  Waiting for experiments to start in {results_dir}{host_label}...")
+                    print(f"  No results found yet.")
+
+            # --once: print once and exit
+            if once_mode:
+                break
 
             # Check if all done
             if progress and all(

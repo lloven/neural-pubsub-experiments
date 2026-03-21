@@ -28,6 +28,8 @@ from pathlib import Path
 
 from scripts._common import (
     COMPOSE_FILE,
+    COMPOSE_FLAT,
+    COMPOSE_GOVERNANCE,
     PROJECT_ROOT,
     inject_compose_kill,
     phase_main,
@@ -113,6 +115,16 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
     if run.failure_injection:
         env["FAILURE_DELAY_S"] = str(run.failure_delay_s)
 
+    # Compose overlay selection based on config
+    # B1: flat overlay (single slice, no isolation)
+    # B3/B4: governance overlay (governance constraints)
+    # B2: base only (default slice-aware, no governance)
+    compose_files: list[Path] | None = None
+    if run.config_name == "B1":
+        compose_files = [COMPOSE_FILE, COMPOSE_FLAT]
+    elif run.config_name in ("B3", "B4"):
+        compose_files = [COMPOSE_FILE, COMPOSE_GOVERNANCE]
+
     failure_fn = None
     if run.failure_injection:
         failure_fn = partial(
@@ -132,6 +144,7 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         total_duration=total_duration,
         dry_run=dry_run,
         failure_fn=failure_fn,
+        compose_files=compose_files,
     )
 
 
