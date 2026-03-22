@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Phase B: Slice-aware placement.
 
-Runs 4 configurations on a single site with multiple network slices:
-  B1 -- Neural Pub/Sub, 1 slice (no slice awareness baseline)
-  B2 -- Neural Pub/Sub, 3 slices, no governance
-  B3 -- Neural Pub/Sub, 3 slices + governance constraints
-  B4 -- Neural Pub/Sub, 3 slices + governance + failure injection at t=15min
+Runs 5 configurations on a single site with multiple network slices:
+  B1   -- Neural Pub/Sub, 1 slice, 3 workers (original flat baseline)
+  B1eq -- Neural Pub/Sub, 1 slice, 5 workers (equalized flat baseline)
+  B2   -- Neural Pub/Sub, 3 slices, no governance
+  B3   -- Neural Pub/Sub, 3 slices + governance constraints
+  B4   -- Neural Pub/Sub, 3 slices + governance + failure injection at t=15min
+
+B1eq uses the same worker count as B2 (5 workers) on a flat network with a
+single broker, isolating the slice-awareness effect from worker count.
 
 Per configuration:
   5 seeds x medium workload x 3-stage pipeline.
@@ -51,6 +55,7 @@ COMPLEXITY_MIX = {"cqi_prediction": 0.5, "anomaly_detection": 0.5, "sensor_fusio
 # Config definitions
 CONFIGS = {
     "B1": {"num_slices": 1, "governance": False, "failure_injection": False},
+    "B1eq": {"num_slices": 1, "governance": False, "failure_injection": False},
     "B2": {"num_slices": 3, "governance": False, "failure_injection": False},
     "B3": {"num_slices": 3, "governance": True, "failure_injection": False},
     "B4": {"num_slices": 3, "governance": True, "failure_injection": True},

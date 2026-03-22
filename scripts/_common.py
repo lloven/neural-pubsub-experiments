@@ -39,6 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.local.yaml"
 COMPOSE_KAFKA = PROJECT_ROOT / "docker-compose.kafka.yaml"
 COMPOSE_FLAT = PROJECT_ROOT / "docker-compose.flat.yaml"
+COMPOSE_FLAT_EQ = PROJECT_ROOT / "docker-compose.flat-equalized.yaml"
 COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
 DEFAULT_SEEDS = [42, 123, 456, 789, 0]  # 5 seeds (Phases A/B/C); Phase D uses 10
 EXTENDED_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]  # 10 seeds for Phase D
@@ -84,6 +85,7 @@ _CONFIG_TABLE: dict[str, dict] = {
     "A3": {"overlays": [], "env": {}, "broker": None},
     # Phase B: slice-aware placement (4 configs × 2 transports)
     "B1": {"overlays": [COMPOSE_FLAT], "env": {}, "broker": None},
+    "B1eq": {"overlays": [COMPOSE_FLAT_EQ], "env": {}, "broker": None},
     "B2": {"overlays": [], "env": {}, "broker": None},
     "B3": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
     "B4": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},

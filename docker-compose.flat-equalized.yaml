@@ -1,0 +1,111 @@
+# =============================================================================
+# Overlay: Flat single-slice topology WITH EQUALIZED WORKERS (Phase B1-eq).
+#
+# Same as docker-compose.flat.yaml but keeps all 5 workers (3 from D1 + 2
+# from D2) on a single flat network with a single broker. This isolates the
+# effect of slice-aware placement from worker count differences.
+#
+# B1 (original): 3 workers, 1 broker, 1 domain  (confounded with B2's 5 workers)
+# B1-eq (this):  5 workers, 1 broker, 1 domain  (fair comparison with B2's 5 workers)
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml -f docker-compose.flat-equalized.yaml up
+# =============================================================================
+
+services:
+
+  # --- Remove domain 2 broker only (workers stay, re-pointed to broker-d1) ---
+  broker-d2:
+    deploy:
+      replicas: 0
+
+  # --- Broker D1: single flat network + federation ----------------------------
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+    networks:
+      - slice-flat
+      - federation
+    dns_opt:
+      - ndots:0
+
+  # --- All 5 workers on flat network with --slice flat -----------------------
+  worker-d1-urllc-1:
+    command: >
+      -m src.worker
+      --node-id d1-urllc-1
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  worker-d1-urllc-2:
+    command: >
+      -m src.worker
+      --node-id d1-urllc-2
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 1.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  worker-d1-embb-1:
+    command: >
+      -m src.worker
+      --node-id d1-embb-1
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 2.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  # --- D2 workers re-pointed to broker-d1 on flat network -------------------
+  worker-d2-embb-1:
+    command: >
+      -m src.worker
+      --node-id d2-embb-1
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 2.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  worker-d2-embb-2:
+    command: >
+      -m src.worker
+      --node-id d2-embb-2
+      --slice flat
+      --domain d1
+      --broker-url http://broker-d1:8080
+      --capacity 2.0
+    networks:
+      - slice-flat
+    dns_opt:
+      - ndots:0
+
+  workload:
+    dns_opt:
+      - ndots:0
+    depends_on:
+      broker-d1:
+        condition: service_healthy
+
+networks:
+  slice-flat:
+    internal: true
