@@ -58,7 +58,7 @@ class RunConfig:
     failure_target: str
     warmup_s: int = 120
     measurement_s: int = 600
-    failure_delay_s: int = 900
+    failure_delay_s: int = 300  # 5min from run start (3min into measurement), consistent with B4
 
 
 def build_run_matrix(
