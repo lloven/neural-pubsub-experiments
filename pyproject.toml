@@ -1,4 +1,5 @@
 [tool.pytest.ini_options]
 markers = [
     "integration: requires Docker Compose stack (deselect with '-m not integration')",
+    "slow: long-running tests that start Docker stacks (deselect with '-k not slow')",
 ]
