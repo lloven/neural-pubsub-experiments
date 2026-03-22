@@ -263,7 +263,7 @@ phase-c)
 phase-d)
     auto_sync
     PHASE_SESSION="npubsub-phase-d"
-    PY_CMD="python3 -m scripts.run_phase_d $(py_resume)"
+    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi

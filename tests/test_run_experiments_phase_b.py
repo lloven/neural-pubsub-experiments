@@ -312,3 +312,26 @@ class TestDispatcherConfigsPassthrough:
         assert "RESUME" in output.upper(), (
             f"--resume must be forwarded to Python.\nOutput:\n{output[-2000:]}"
         )
+
+
+class TestDispatcherPhaseDPassthrough:
+    """The dispatcher must forward --configs and --dry-run to Phase D."""
+
+    def test_phase_d_dry_run(self):
+        """phase-d --dry-run should not start Docker."""
+        result = run_root_script("phase-d", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "DRY RUN" in output.upper(), (
+            f"--dry-run must be forwarded to Phase D Python.\nOutput:\n{output[-2000:]}"
+        )
+
+    def test_phase_d_configs_forwarded(self):
+        """--configs D1 should plan only D1 runs."""
+        result = run_root_script("phase-d", "--configs", "D1", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        # D1 only, 10 seeds (Phase D uses extended seeds) = 10 runs
+        assert "D1" in output, (
+            f"--configs D1 should produce D1 runs.\nOutput:\n{output[-2000:]}"
+        )
