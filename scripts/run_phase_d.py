@@ -28,6 +28,7 @@ from pathlib import Path
 
 from scripts._common import (
     COMPOSE_FILE,
+    EXTENDED_SEEDS,
     PROJECT_ROOT,
     inject_compose_kill,
     inject_network_partition,
@@ -163,6 +164,7 @@ def main():
         build_matrix_fn=build_run_matrix,
         run_fn=_run,
         results_dir=RESULTS_DIR,
+        default_seeds=EXTENDED_SEEDS,
     )
 
 

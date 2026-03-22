@@ -570,6 +570,7 @@ def phase_main(
     results_dir: Path,
     extra_args_fn: Callable[[argparse.ArgumentParser], None] | None = None,
     parse_extra_fn: Callable[[argparse.Namespace], dict] | None = None,
+    default_seeds: list[int] | None = None,
 ) -> None:
     """Shared entry point for all phase runner scripts.
 
@@ -602,9 +603,10 @@ def phase_main(
         "--configs", default=default_configs,
         help=f"Comma-separated config names (default: {default_configs})",
     )
+    _seeds = default_seeds if default_seeds is not None else DEFAULT_SEEDS
     parser.add_argument(
-        "--seeds", default=",".join(str(s) for s in DEFAULT_SEEDS),
-        help=f"Comma-separated seeds (default: {DEFAULT_SEEDS})",
+        "--seeds", default=",".join(str(s) for s in _seeds),
+        help=f"Comma-separated seeds (default: {_seeds})",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print runs without executing")
     parser.add_argument("--resume", action="store_true", help="Skip runs already completed (reads .progress.json)")
