@@ -1,11 +1,10 @@
-"""Tests for Phase B integration in scripts/5gtn/run-experiments.sh.
+"""Tests for Phase B integration in run-experiments.sh.
 
-Validates that the 5GTN VM bash orchestrator correctly maps Phase B
-configs (B1, B1eq, B2, B3, B4) to compose overlays, environment
-variables, transport dimensions, and result file naming.
+Validates that the canonical run-experiments.sh dispatcher (repo root)
+correctly forwards flags to the Python orchestrator (scripts/run_phase_b.py),
+including --resume, --configs, and --dry-run.
 
-The 5gtn script runs Docker directly (no Python), so we test via
---dry-run mode which prints the planned runs without invoking Docker.
+Also validates the legacy 5gtn script for compose overlay mapping.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ import pytest
 from scripts._common import PROJECT_ROOT
 
 SCRIPT_5GTN = str(PROJECT_ROOT / "scripts" / "5gtn" / "run-experiments.sh")
+SCRIPT_ROOT = str(PROJECT_ROOT / "run-experiments.sh")
 
 
 def run_5gtn_script(*args: str, timeout: int = 10) -> subprocess.CompletedProcess:
@@ -31,6 +31,18 @@ def run_5gtn_script(*args: str, timeout: int = 10) -> subprocess.CompletedProces
         timeout=timeout,
         cwd=str(PROJECT_ROOT / "scripts" / "5gtn"),
         env={**os.environ, "TMUX": "fake-session"},  # prevent tmux wrapping
+    )
+
+
+def run_root_script(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run the repo-root run-experiments.sh dispatcher."""
+    return subprocess.run(
+        [SCRIPT_ROOT, *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ, "TMUX": "fake-session", "PYTHONPATH": str(PROJECT_ROOT)},
     )
 
 
@@ -252,4 +264,51 @@ class TestDeployPhaseB:
         deploy_script = (PROJECT_ROOT / "scripts" / "5gtn" / "deploy.sh").read_text()
         assert "run_phase_b.py" in deploy_script, (
             "deploy.sh should copy run_phase_b.py to the VM"
+        )
+
+
+# =============================================================================
+# Tests for the canonical repo-root run-experiments.sh dispatcher
+# =============================================================================
+
+
+class TestDispatcherConfigsPassthrough:
+    """The dispatcher must forward --configs to the Python orchestrator."""
+
+    def test_configs_flag_forwarded_to_phase_b(self):
+        """run-experiments.sh phase-b --configs B1eq --dry-run should
+        only plan B1eq runs (10), not all 50."""
+        result = run_root_script("phase-b", "--configs", "B1eq", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        # Python dry-run prints "10 runs planned" for single config
+        assert "10 runs planned" in output, (
+            f"--configs B1eq should produce 10 runs.\nOutput:\n{output[-2000:]}"
+        )
+
+    def test_configs_flag_forwarded_multiple(self):
+        """--configs B1,B2 should produce 20 runs."""
+        result = run_root_script("phase-b", "--configs", "B1,B2", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "20 runs planned" in output, (
+            f"--configs B1,B2 should produce 20 runs.\nOutput:\n{output[-2000:]}"
+        )
+
+    def test_dry_run_forwarded_to_phase_b(self):
+        """--dry-run should be forwarded; no Docker containers started."""
+        result = run_root_script("phase-b", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "DRY RUN" in output.upper(), (
+            f"--dry-run must be forwarded to Python.\nOutput:\n{output[-2000:]}"
+        )
+
+    def test_resume_forwarded_to_phase_b(self):
+        """--resume should be forwarded to the Python orchestrator."""
+        result = run_root_script("phase-b", "--resume", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "RESUME" in output.upper(), (
+            f"--resume must be forwarded to Python.\nOutput:\n{output[-2000:]}"
         )

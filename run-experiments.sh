@@ -126,6 +126,11 @@ maybe_tmux_wrap() {
     shift
     local full_cmd="$*"
 
+    # Skip tmux wrapping for dry runs
+    if [[ -n "$DRY_RUN" ]]; then
+        return 1
+    fi
+
     if [[ -z "${TMUX:-}" ]]; then
         if [[ -n "$REMOTE_MODE" ]]; then
             info "Creating tmux session '$session_name' on $TARGET_HOST ..."
@@ -150,19 +155,35 @@ maybe_tmux_wrap() {
     return 1
 }
 
-# --- Parse --resume from remaining args --------------------------------------
+# --- Parse flags from remaining args ------------------------------------------
 RESUME=""
+DRY_RUN=""
+CONFIGS_ARG=""
 remaining_args=()
 for arg in "$@"; do
     case "$arg" in
-        --resume) RESUME=1 ;;
-        *)        remaining_args+=("$arg") ;;
+        --resume)  RESUME=1 ;;
+        --dry-run) DRY_RUN=1 ;;
+        --configs) ;; # value consumed by next iteration via shift-like logic below
+        *)         remaining_args+=("$arg") ;;
     esac
 done
-set -- "${remaining_args[@]+"${remaining_args[@]}"}"
+# Re-parse to capture --configs VALUE (two-token flag)
+set -- "$@"  # reset positional params to original
+remaining_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --resume)  shift ;;
+        --dry-run) shift ;;
+        --configs) CONFIGS_ARG="$2"; shift 2 ;;
+        *)         remaining_args+=("$1"); shift ;;
+    esac
+done
 
-# Helper: build Python resume flag
-py_resume() { [[ -n "$RESUME" ]] && echo "--resume" || true; }
+# Helper: build Python flags
+py_resume()  { [[ -n "$RESUME" ]]      && echo "--resume"  || true; }
+py_dry_run() { [[ -n "$DRY_RUN" ]]     && echo "--dry-run" || true; }
+py_configs() { [[ -n "$CONFIGS_ARG" ]]  && echo "--configs $CONFIGS_ARG" || true; }
 
 # =============================================================================
 # Command dispatch -- delegates all experiment logic to Python
@@ -213,7 +234,7 @@ phase-a6)
 phase-b)
     auto_sync
     PHASE_SESSION="npubsub-phase-b"
-    PY_CMD="python3 -m scripts.run_phase_b $(py_resume)"
+    PY_CMD="python3 -m scripts.run_phase_b $(py_resume) $(py_dry_run) $(py_configs)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
