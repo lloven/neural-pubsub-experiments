@@ -159,23 +159,15 @@ maybe_tmux_wrap() {
 RESUME=""
 DRY_RUN=""
 CONFIGS_ARG=""
+SEEDS_ARG=""
 remaining_args=()
-for arg in "$@"; do
-    case "$arg" in
-        --resume)  RESUME=1 ;;
-        --dry-run) DRY_RUN=1 ;;
-        --configs) ;; # value consumed by next iteration via shift-like logic below
-        *)         remaining_args+=("$arg") ;;
-    esac
-done
-# Re-parse to capture --configs VALUE (two-token flag)
-set -- "$@"  # reset positional params to original
-remaining_args=()
+# Parse two-token flags (--configs VALUE, --seeds VALUE)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --resume)  shift ;;
-        --dry-run) shift ;;
+        --resume)  RESUME=1; shift ;;
+        --dry-run) DRY_RUN=1; shift ;;
         --configs) CONFIGS_ARG="$2"; shift 2 ;;
+        --seeds)   SEEDS_ARG="$2"; shift 2 ;;
         *)         remaining_args+=("$1"); shift ;;
     esac
 done
@@ -184,6 +176,7 @@ done
 py_resume()  { [[ -n "$RESUME" ]]      && echo "--resume"  || true; }
 py_dry_run() { [[ -n "$DRY_RUN" ]]     && echo "--dry-run" || true; }
 py_configs() { [[ -n "$CONFIGS_ARG" ]]  && echo "--configs $CONFIGS_ARG" || true; }
+py_seeds()   { [[ -n "$SEEDS_ARG" ]]   && echo "--seeds $SEEDS_ARG"   || true; }
 
 # =============================================================================
 # Command dispatch -- delegates all experiment logic to Python
@@ -234,7 +227,7 @@ phase-a6)
 phase-b)
     auto_sync
     PHASE_SESSION="npubsub-phase-b"
-    PY_CMD="python3 -m scripts.run_phase_b $(py_resume) $(py_dry_run) $(py_configs)"
+    PY_CMD="python3 -m scripts.run_phase_b $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
@@ -263,7 +256,7 @@ phase-c)
 phase-d)
     auto_sync
     PHASE_SESSION="npubsub-phase-d"
-    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs)"
+    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi

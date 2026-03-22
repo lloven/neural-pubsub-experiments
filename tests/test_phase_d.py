@@ -70,3 +70,22 @@ class TestPhaseDMatrix:
         for name, cfg in CONFIGS.items():
             assert "failure_type" in cfg, f"{name} missing failure_type"
             assert "failure_target" in cfg, f"{name} missing failure_target"
+
+
+class TestPhaseDDefaultSeeds:
+    """Phase D should default to 10 extended seeds for recovery-time analysis."""
+
+    def test_phase_d_defaults_to_extended_seeds(self):
+        """run_phase_d.py with no --seeds arg should plan 10 seeds per config."""
+        import subprocess, sys, os
+        from scripts._common import PROJECT_ROOT
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.run_phase_d", "--configs", "D1", "--dry-run"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(PROJECT_ROOT),
+            env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        )
+        output = result.stdout + result.stderr
+        assert "10 runs planned" in output, (
+            f"Phase D should default to 10 seeds (EXTENDED_SEEDS), got:\n{output[-1000:]}"
+        )
