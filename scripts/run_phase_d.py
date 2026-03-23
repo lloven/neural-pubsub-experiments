@@ -91,6 +91,7 @@ def _make_failure_fn(
     run: RunConfig,
     project_name: str,
     env: dict[str, str],
+    compose_files: list[Path] | None = None,
 ):
     """Return the appropriate failure injection callable for this run."""
     if run.failure_type in ("worker", "broker"):
@@ -102,6 +103,7 @@ def _make_failure_fn(
             target=run.failure_target,
             delay_s=run.failure_delay_s,
             label=run.failure_type,
+            compose_files=compose_files,
         )
     elif run.failure_type == "network":
         return partial(
@@ -152,11 +154,13 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         "FAILURE_DELAY_S": str(run.failure_delay_s),
     }
 
-    failure_fn = _make_failure_fn(run, project_name, env)
-
     # Phase D uses the failure compose overlay to disable restart: unless-stopped.
     # Without this, Docker auto-restarts killed containers, making injection invisible.
+    # The compose_files list must be passed to BOTH run_single AND the failure fn,
+    # so that `docker compose kill` uses the same file stack as `docker compose up`.
     compose_files = [COMPOSE_FILE, COMPOSE_FAILURE]
+
+    failure_fn = _make_failure_fn(run, project_name, env, compose_files=compose_files)
 
     return run_single(
         run_id=run_id,
