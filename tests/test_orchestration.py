@@ -125,8 +125,8 @@ class TestResolveConfig:
             assert cfg.compose_files == [COMPOSE_LOCAL], f"{name} should use base only"
 
     def test_D_configs_use_base_only(self):
-        """D1-D4 use only the local compose file (future phases)."""
-        for name in ["D1", "D2", "D3", "D4"]:
+        """D1-D2 use only the local compose file."""
+        for name in ["D1", "D2"]:
             cfg = self._resolve(name)
             assert cfg.compose_files == [COMPOSE_LOCAL], f"{name} should use base only"
 

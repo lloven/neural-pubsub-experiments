@@ -93,11 +93,11 @@ _CONFIG_TABLE: dict[str, dict] = {
     "C1": {"overlays": [], "env": {}, "broker": None},
     "C2": {"overlays": [], "env": {}, "broker": None},
     "C3": {"overlays": [], "env": {}, "broker": None},
-    # Phase D: failure resilience (4 configs × 2 transports)
+    "C4": {"overlays": [], "env": {}, "broker": None},
+    "C5": {"overlays": [], "env": {}, "broker": None},
+    # Phase D: worker failure resilience (2 configs: eMBB + URLLC worker kills)
     "D1": {"overlays": [], "env": {}, "broker": None},
     "D2": {"overlays": [], "env": {}, "broker": None},
-    "D3": {"overlays": [], "env": {}, "broker": None},
-    "D4": {"overlays": [], "env": {}, "broker": None},
 }
 
 

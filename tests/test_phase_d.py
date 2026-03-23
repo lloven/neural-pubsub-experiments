@@ -55,9 +55,9 @@ class TestPhaseDMatrix:
         )
 
     def test_full_matrix_size(self):
-        """3 configs × 10 seeds = 30 runs."""
+        """2 configs x 10 seeds = 20 runs."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        assert len(matrix) == 30, f"Expected 30 runs, got {len(matrix)}"
+        assert len(matrix) == 20, f"Expected 20 runs, got {len(matrix)}"
 
     def test_single_config_matrix(self):
         """Single config × 5 default seeds = 5 runs."""
@@ -107,51 +107,65 @@ class TestPhaseDRunId:
         assert len(run_ids) == len(set(run_ids)), f"Duplicate run_ids: {run_ids}"
 
     def test_full_matrix_unique_run_ids(self):
-        """All 30 runs in the full matrix must have unique run_ids."""
+        """All 20 runs in the full matrix must have unique run_ids."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
         run_ids = [r.run_id for r in matrix]
-        assert len(run_ids) == 30
-        assert len(set(run_ids)) == 30, f"Duplicate run_ids found"
+        assert len(run_ids) == 20
+        assert len(set(run_ids)) == 20, f"Duplicate run_ids found"
 
 
-class TestPhaseDNoD2:
-    """D2 (broker-d1 kill) was removed: killing the only broker that receives
-    all traffic is a trivial total outage, not an interesting resilience
-    experiment.  Phase D now has 3 configs: D1, D3, D4."""
+class TestPhaseDTwoConfigs:
+    """Phase D now has exactly 2 configs: D1 (eMBB worker kill) and D2
+    (URLLC worker kill). D3 (network partition) and old D4 moved to Phase C
+    where cross-domain traffic makes them meaningful. Old D4 renamed to D2."""
 
-    def test_configs_has_exactly_three_entries(self):
-        """Phase D must have exactly 3 configs after D2 removal."""
-        assert len(CONFIGS) == 3, (
-            f"Expected 3 configs (D1, D3, D4), got {len(CONFIGS)}: "
+    def test_configs_has_exactly_two_entries(self):
+        """Phase D must have exactly 2 configs: D1 and D2."""
+        assert len(CONFIGS) == 2, (
+            f"Expected 2 configs (D1, D2), got {len(CONFIGS)}: "
             f"{sorted(CONFIGS.keys())}"
         )
 
-    def test_d2_not_in_configs(self):
-        """D2 must not be present in CONFIGS."""
-        assert "D2" not in CONFIGS, (
-            "D2 (broker-d1 kill) should be removed: killing the only broker "
-            "that receives all traffic is a trivial total outage."
+    def test_d3_not_in_configs(self):
+        """D3 must not be present in CONFIGS (moved to Phase C)."""
+        assert "D3" not in CONFIGS, (
+            "D3 (network partition) moved to Phase C where cross-domain "
+            "traffic makes it meaningful."
         )
 
-    def test_full_matrix_size_is_30(self):
-        """3 configs x 10 seeds = 30 runs (was 40 with D2)."""
+    def test_d4_not_in_configs(self):
+        """D4 must not be present in CONFIGS (renamed to D2)."""
+        assert "D4" not in CONFIGS, (
+            "D4 (URLLC worker kill) was renamed to D2."
+        )
+
+    def test_d2_target_is_urllc_worker(self):
+        """D2 (formerly D4) must target the URLLC worker."""
+        assert "D2" in CONFIGS, "D2 must exist in CONFIGS"
+        target = CONFIGS["D2"]["failure_target"]
+        assert target == "worker-d1-urllc-1", (
+            f"D2 must target 'worker-d1-urllc-1' (URLLC worker), got '{target}'"
+        )
+
+    def test_d1_and_d2_target_different_workers(self):
+        """D1 and D2 must target different workers to test distinct failure modes."""
+        d1_target = CONFIGS["D1"]["failure_target"]
+        d2_target = CONFIGS["D2"]["failure_target"]
+        assert d1_target != d2_target, (
+            f"D1 and D2 target the same worker '{d1_target}'. "
+            f"D1 targets eMBB, D2 targets URLLC."
+        )
+
+    def test_remaining_configs_are_d1_d2(self):
+        """Exactly D1 and D2 must be present."""
+        assert set(CONFIGS.keys()) == {"D1", "D2"}, (
+            f"Expected configs {{D1, D2}}, got {set(CONFIGS.keys())}"
+        )
+
+    def test_full_matrix_size_is_20(self):
+        """2 configs x 10 seeds = 20 runs."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        assert len(matrix) == 30, f"Expected 30 runs, got {len(matrix)}"
-
-    def test_no_d2_run_ids_generated(self):
-        """No run_id in the full matrix should start with 'D2'."""
-        matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        d2_runs = [r for r in matrix if r.run_id.startswith("D2")]
-        assert len(d2_runs) == 0, (
-            f"Found {len(d2_runs)} D2 run_ids but D2 should be removed: "
-            f"{[r.run_id for r in d2_runs]}"
-        )
-
-    def test_remaining_configs_are_d1_d3_d4(self):
-        """After D2 removal, exactly D1, D3, D4 must remain."""
-        assert set(CONFIGS.keys()) == {"D1", "D3", "D4"}, (
-            f"Expected configs {{D1, D3, D4}}, got {set(CONFIGS.keys())}"
-        )
+        assert len(matrix) == 20, f"Expected 20 runs, got {len(matrix)}"
 
 
 class TestPhaseDDefaultSeeds:

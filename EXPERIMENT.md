@@ -40,7 +40,7 @@ The experiment answers three questions about distributing AI inference pipelines
 | **Number of slices** | 1, 3 | Tests slice-aware placement value |
 | **Governance** | Off, on (data sovereignty: raw data stays in originating domain) | Tests governance overhead |
 | **Federation** | Single domain, 2-domain federated | Tests cross-domain routing |
-| **Failure type** | None, worker kill, broker kill, network partition, partial sensor loss | Tests resilience mechanisms |
+| **Failure type** | None, eMBB worker kill, URLLC worker kill (Phase D); broker kill, network partition (Phase C) | Tests resilience mechanisms |
 
 ### Dependent variables (metrics)
 
@@ -144,45 +144,52 @@ The experiment answers three questions about distributing AI inference pipelines
 
 ### Phase C: Cross-site federation
 
-**Purpose:** Measure federation overhead and governance enforcement across domains. Tests H4, H5, and partially H6. Answers RQ2.
+**Purpose:** Measure federation overhead and governance enforcement across domains, including federation-level failure resilience. Tests H4, H5, and partially H6. Answers RQ2.
 
 **Topology:** Two domains (Domain 1: Tokyo/Nakao Lab; Domain 2: Oulu/5GTNF or emulated with calibrated WAN delay).
 
-| Config | Strategy | Federation | Governance | Failure |
-|--------|----------|------------|------------|---------|
-| C1 | Kafka at each site | Static routing | Off | None |
-| C2 | Neural Pub/Sub | 2-broker federated | Off | None |
-| C3 | Neural Pub/Sub | 2-broker federated | On (raw radio data stays in originating domain) | None |
-| C4 | Neural Pub/Sub | 2-broker federated | On | Broker kill at t=15min |
+The Neural Pub/Sub is the **broker** (semantic routing and placement), not the transport. HTTP and Kafka provide transport. Transport (HTTP vs Kafka) is validated as orthogonal in Phase B. Phase C uses HTTP throughout; the independent variables are federation and governance.
+
+| Config | Broker | Transport | Governance | Failure |
+|--------|--------|-----------|------------|---------|
+| C1 | Static broker | HTTP | Off | None (baseline) |
+| C2 | Neural broker (federated) | HTTP | Off | None |
+| C3 | Neural broker (federated) | HTTP | On | None |
+| C4 | Neural broker (federated) | HTTP | On | broker-d2 kill at t=15min |
+| C5 | Neural broker (federated) | HTTP | On | Federation network partition at t=15min |
 
 **Pipeline:** CQI prediction. The `collect` and `preprocess` stages must stay in the originating domain (governance); the `predict` stage can be placed in either domain.
 
-**Matrix:** 4 configs x 1 rate (medium) x 5 seeds = 20 runs.
+**Matrix:** 5 configs x 1 rate (medium) x 5 seeds = 25 runs.
 
 **Cross-site fallback:** If remote 5GTNF access is unavailable, Phase C runs on the local Docker Compose environment with calibrated WAN latency (measured Tokyo-Oulu RTT injected via `tc qdisc`). This is scientifically valid when clearly described as emulated cross-site with measured latency parameters.
 
 **Expected outputs:**
 - Single-site vs. cross-site latency comparison (C1 vs. C2)
 - Federation bandwidth breakdown (summary propagation vs. forwarded publications)
-- Governance compliance verification log (C3, C4)
+- Governance compliance verification log (C3, C4, C5)
 - Cross-domain routing decision distribution (local vs. forwarded)
+- Recovery timeline for federation-level failures (C4: broker kill, C5: network partition)
 
 ### Phase D: Failure and adaptation
 
-**Purpose:** Systematic failure injection to characterise resilience. Tests H6. Answers RQ3.
+**Purpose:** Systematic worker failure injection to characterise resilience at the execution-unit level. Tests H6. Answers RQ3.
+
+D1 and D2 target different slice-specific workers to test whether failure impact depends on the worker's role in the pipeline topology.
 
 | Config | Failure type | Injection time | Expected behaviour |
 |--------|-------------|---------------|-------------------|
-| D1 | Worker kill (`docker kill`) | t=15min | Broker health check detects failure; affected stages re-placed on surviving workers |
-| D2 | Broker kill (one of two federated brokers) | t=15min | Peer broker detects via summary propagation timeout; local-only routing for affected domain |
-| D3 | Network partition (`docker network disconnect`) | t=15min | Federation link down; both brokers fall back to local-only routing using cached summaries |
-| D4 | Partial sensor loss (scale down sensor workers) | t=15min | Funnel pipeline stages with missing inputs: configurable wait/proceed/abort policy |
+| D1 | eMBB worker kill (`docker kill worker-d1-embb-1`) | t=15min | Tests recovery when an anomaly-detection worker fails. Broker health check detects failure; affected stages re-placed on surviving workers. |
+| D2 | URLLC worker kill (`docker kill worker-d1-urllc-1`) | t=15min | Tests recovery when a CQI/sensor worker fails. Broker health check detects failure; affected stages re-placed on surviving URLLC workers. |
 
-**Matrix:** 4 configs x 10 seeds = 40 runs.
+**Matrix:** 2 configs x 10 seeds = 20 runs.
+
+Federation-level failures (broker kill, network partition) are tested in Phase C configs C4-C5, which provide the cross-domain traffic necessary for meaningful treatment effects.
 
 **Expected outputs:**
 - Recovery timeline plots per failure type (time to detect, time to re-route, pipeline success rate)
 - Pipeline completion rate: before, during (30s window around failure), and after recovery
+- Comparison of recovery time across worker roles (eMBB vs. URLLC)
 - Comparison of recovery time vs. configuration parameters (health check interval, propagation interval)
 
 ### Phase E: Scaling study (simulation)
@@ -325,7 +332,7 @@ The experiment must produce data sufficient to evaluate all six hypotheses:
 | Slice-aware placement reduces latency (H3) | Phase B | B2 p95 < B1 p95 with p < 0.05 |
 | Governance overhead is bounded (H4) | Phase B, C | Report B3/B2 and C3/C2 latency ratios with confidence intervals |
 | Federation scales linearly (H5) | Phase C, E | If Phase E completed: summary bandwidth proportional to domain count under hierarchical topology. If not: report 2-domain overhead and state scaling as conjecture |
-| Recovery within bounded time (H6) | Phase D | Report detection time and re-placement time separately (10 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D4 |
+| Recovery within bounded time (H6) | Phase C, D | Report detection time and re-placement time separately (10 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D2 (worker failures) and C4-C5 (federation failures) |
 
 ## 10. Reproducibility
 
