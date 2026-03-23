@@ -214,3 +214,51 @@ class TestFailureComposeOverlay:
         assert "failure" in content.lower() and "compose" in content.lower(), (
             "run_phase_d.py must reference the failure compose overlay"
         )
+
+
+# ---------------------------------------------------------------------------
+# 5. Phase D uses detached compose mode (no --abort-on-container-exit)
+# ---------------------------------------------------------------------------
+
+class TestPhaseDDetachedMode:
+    """Phase D must use detached compose mode so killed containers don't
+    abort the entire experiment."""
+
+    def test_run_single_accepts_detached_param(self):
+        """run_single must accept a 'detached' parameter."""
+        import inspect
+        from scripts._common import run_single
+        sig = inspect.signature(run_single)
+        assert "detached" in sig.parameters, (
+            "run_single() must accept a 'detached' parameter for Phase D"
+        )
+
+    def test_compose_up_detached_exists(self):
+        """A compose_up_detached function must exist in _common."""
+        from scripts._common import compose_up_detached
+        assert callable(compose_up_detached)
+
+    def test_compose_up_detached_uses_detached_flag(self):
+        """compose_up_detached must use 'up -d' (detached), not --abort-on-container-exit."""
+        import inspect
+        from scripts._common import compose_up_detached
+        source = inspect.getsource(compose_up_detached)
+        # Strip docstring
+        parts = source.split('"""')
+        executable = parts[-1] if len(parts) >= 3 else source
+        assert "abort-on-container-exit" not in executable, (
+            "compose_up_detached executable code must NOT use --abort-on-container-exit"
+        )
+        # Check for detached mode (-d flag in the subprocess command)
+        assert '"-d"' in executable, (
+            "compose_up_detached must use -d (detached) flag"
+        )
+
+    def test_phase_d_passes_detached_true(self):
+        """run_phase_d._run must pass detached=True to run_single."""
+        import inspect
+        from scripts.run_phase_d import _run
+        source = inspect.getsource(_run)
+        assert "detached" in source and "True" in source, (
+            "Phase D _run() must pass detached=True to run_single()"
+        )

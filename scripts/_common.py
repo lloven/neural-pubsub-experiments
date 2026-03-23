@@ -262,6 +262,66 @@ def compose_up(
             logger.error("Project %s failed: %s", project_name, e)
 
 
+def compose_up_detached(
+    project_name: str,
+    compose_file: Path,
+    env: dict[str, str],
+    duration_s: int,
+    failure_fn: Callable[[], None] | None = None,
+    compose_files: list[Path] | None = None,
+) -> None:
+    """Start containers detached, run failure thread, wait for workload exit.
+
+    Unlike :func:`compose_up`, this does NOT use ``--abort-on-container-exit``.
+    Used by Phase D where killed containers should not stop the experiment.
+    The workload container runs for DURATION_S and exits naturally; we poll
+    for its exit then return.
+
+    Args:
+        project_name: Docker Compose project name (``-p`` flag).
+        compose_file: Path to the docker-compose YAML (fallback for compose_files).
+        env: Environment variable overrides.
+        duration_s: Expected experiment duration (warmup + measurement).
+        failure_fn: Optional failure injection callable (run in daemon thread).
+        compose_files: Compose file paths (base + overlays).
+    """
+    compose_env = {**os.environ, **env}
+    files = compose_files or [compose_file]
+    file_args = []
+    for f in files:
+        file_args.extend(["-f", str(f)])
+
+    # Start containers in detached mode (killed containers won't stop others)
+    logger.info("Starting %s in detached mode (no abort-on-exit)", project_name)
+    subprocess.run(
+        ["docker", "compose", *file_args, "-p", project_name,
+         "up", "-d", "--build"],
+        env=compose_env, check=True, timeout=180,
+    )
+
+    # Start failure injection thread
+    if failure_fn is not None:
+        failure_thread = threading.Thread(target=failure_fn, daemon=True)
+        failure_thread.start()
+
+    # Poll for workload container exit (it runs for DURATION_S then exits)
+    workload_container = f"{project_name}-workload-1"
+    deadline = time.time() + duration_s + 120  # grace period
+    logger.info("Waiting for workload to finish (timeout=%ds)", duration_s + 120)
+
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", workload_container],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0 or result.stdout.strip() == "false":
+            logger.info("Workload container exited")
+            break
+        time.sleep(5)
+    else:
+        logger.warning("Workload did not exit within deadline, proceeding to cleanup")
+
+
 def compose_down(
     project_name: str,
     compose_file: Path,
@@ -458,6 +518,7 @@ def run_single(
     dry_run: bool = False,
     failure_fn: Callable[[], None] | None = None,
     compose_files: list[Path] | None = None,
+    detached: bool = False,
 ) -> dict[str, str]:
     """Execute one experiment run via Docker Compose and return a result dict.
 
@@ -478,6 +539,10 @@ def run_single(
     compose_files:
         Optional list of compose file paths (base + overlays). Defaults to
         ``[COMPOSE_FILE]`` when None.
+    detached:
+        If True, use :func:`compose_up_detached` instead of :func:`compose_up`.
+        Required for Phase D where killed containers should not abort the
+        experiment via ``--abort-on-container-exit``.
     """
     result_file = results_dir / f"{run_id}.csv"
     project_name = f"npubsub-{run_id.lower().replace('_', '-')}"
@@ -494,14 +559,24 @@ def run_single(
     env["RESULT_FILE"] = str(container_result)
 
     try:
-        compose_up(
-            project_name=project_name,
-            compose_file=COMPOSE_FILE,
-            env=env,
-            timeout_s=total_duration + 120,
-            failure_fn=failure_fn,
-            compose_files=compose_files,
-        )
+        if detached:
+            compose_up_detached(
+                project_name=project_name,
+                compose_file=COMPOSE_FILE,
+                env=env,
+                duration_s=total_duration,
+                failure_fn=failure_fn,
+                compose_files=compose_files,
+            )
+        else:
+            compose_up(
+                project_name=project_name,
+                compose_file=COMPOSE_FILE,
+                env=env,
+                timeout_s=total_duration + 120,
+                failure_fn=failure_fn,
+                compose_files=compose_files,
+            )
     finally:
         compose_down(project_name, COMPOSE_FILE, env, compose_files=compose_files)
         # Fix file ownership: Docker writes as root; make results readable
