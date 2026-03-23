@@ -41,12 +41,14 @@ logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "phase_d"
 
-# Config definitions: each maps to a failure type and docker target
+# Config definitions: each maps to a failure type and docker target.
+# CRITICAL: targets MUST match actual compose service/network names.
+# Validated by tests/test_failure_targets.py against compose YAML files.
 CONFIGS = {
-    "D1": {"failure_type": "worker", "failure_target": "worker"},
-    "D2": {"failure_type": "broker", "failure_target": "broker-domain2"},
-    "D3": {"failure_type": "network", "failure_target": "federation-net"},
-    "D4": {"failure_type": "funnel", "failure_target": "sensor-worker"},
+    "D1": {"failure_type": "worker", "failure_target": "worker-d1-embb-1"},
+    "D2": {"failure_type": "broker", "failure_target": "broker-d2"},
+    "D3": {"failure_type": "network", "failure_target": "federation"},
+    "D4": {"failure_type": "funnel", "failure_target": "worker-d1-urllc-1"},
 }
 
 

@@ -19,7 +19,7 @@ class TestPhaseDTiming:
         otherwise the failure never triggers."""
         rc = RunConfig(
             config_name="D1", seed=42,
-            failure_type="worker", failure_target="worker",
+            failure_type="worker", failure_target="worker-d1-embb-1",
         )
         total = rc.warmup_s + rc.measurement_s
         assert rc.failure_delay_s < total, (
@@ -33,7 +33,7 @@ class TestPhaseDTiming:
         to measure recovery time and steady-state return."""
         rc = RunConfig(
             config_name="D1", seed=42,
-            failure_type="worker", failure_target="worker",
+            failure_type="worker", failure_target="worker-d1-embb-1",
         )
         total = rc.warmup_s + rc.measurement_s
         post_failure = total - rc.failure_delay_s
@@ -79,24 +79,24 @@ class TestPhaseDRunId:
         """RunConfig must expose a run_id property (not just config_name)."""
         rc = RunConfig(
             config_name="D1", seed=42,
-            failure_type="worker", failure_target="worker",
+            failure_type="worker", failure_target="worker-d1-embb-1",
         )
         assert hasattr(rc, 'run_id'), "RunConfig must have a run_id property"
 
     def test_run_id_includes_seed(self):
         """run_id must distinguish different seeds of the same config."""
-        rc1 = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
-        rc2 = RunConfig(config_name="D1", seed=123, failure_type="worker", failure_target="worker")
+        rc1 = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker-d1-embb-1")
+        rc2 = RunConfig(config_name="D1", seed=123, failure_type="worker", failure_target="worker-d1-embb-1")
         assert rc1.run_id != rc2.run_id, "Different seeds must have different run_ids"
 
     def test_run_id_includes_failure_type(self):
         """run_id must include the failure type for clarity."""
-        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
+        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker-d1-embb-1")
         assert "worker" in rc.run_id
 
     def test_run_id_matches_run_function_format(self):
         """run_id property must match the format used in _run()."""
-        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
+        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker-d1-embb-1")
         expected = f"{rc.config_name}_failure-{rc.failure_type}_seed-{rc.seed}"
         assert rc.run_id == expected, f"Expected '{expected}', got '{rc.run_id}'"
 

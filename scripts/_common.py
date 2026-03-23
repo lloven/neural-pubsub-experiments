@@ -343,6 +343,9 @@ def inject_compose_kill(
         logger.info("%s failure injected: %s killed", label.capitalize(), target)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.error("%s failure injection failed: %s", label.capitalize(), e)
+        raise RuntimeError(
+            f"Failure injection failed for {label} (target={target}): {e}"
+        ) from e
 
 
 def inject_network_partition(
