@@ -28,6 +28,7 @@ from pathlib import Path
 
 from scripts._common import (
     COMPOSE_FILE,
+    PROJECT_ROOT,
     EXTENDED_SEEDS,
     PROJECT_ROOT,
     inject_compose_kill,
@@ -40,6 +41,7 @@ from scripts._common import (
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "phase_d"
+COMPOSE_FAILURE = PROJECT_ROOT / "docker-compose.failure.yaml"
 
 # Config definitions: each maps to a failure type and docker target.
 # CRITICAL: targets MUST match actual compose service/network names.
@@ -152,6 +154,10 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
 
     failure_fn = _make_failure_fn(run, project_name, env)
 
+    # Phase D uses the failure compose overlay to disable restart: unless-stopped.
+    # Without this, Docker auto-restarts killed containers, making injection invisible.
+    compose_files = [COMPOSE_FILE, COMPOSE_FAILURE]
+
     return run_single(
         run_id=run_id,
         env=env,
@@ -159,6 +165,7 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         total_duration=total_duration,
         dry_run=dry_run,
         failure_fn=failure_fn,
+        compose_files=compose_files,
     )
 
 

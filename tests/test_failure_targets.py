@@ -161,3 +161,56 @@ class TestFailureTargetDocumentation:
                 f"not an actual compose service/network name. Use the specific "
                 f"service name (e.g., 'worker-d1-embb-1', 'broker-d2')."
             )
+
+
+# ---------------------------------------------------------------------------
+# 4. Phase D compose overlay disables restart policy
+# ---------------------------------------------------------------------------
+
+class TestFailureComposeOverlay:
+    """Phase D must use a compose overlay that disables restart policy."""
+
+    COMPOSE_FAILURE = PROJECT_ROOT / "docker-compose.failure.yaml"
+
+    def test_failure_overlay_exists(self):
+        """A failure overlay compose file must exist for Phase D."""
+        assert self.COMPOSE_FAILURE.exists(), (
+            f"Missing {self.COMPOSE_FAILURE}. Phase D needs a compose overlay "
+            f"that sets restart: 'no' to prevent Docker from restarting killed containers."
+        )
+
+    def test_failure_overlay_disables_restart_for_all_services(self):
+        """Every service in the failure overlay must have restart: 'no'."""
+        if not self.COMPOSE_FAILURE.exists():
+            pytest.skip("Failure overlay not yet created")
+        with open(self.COMPOSE_FAILURE) as f:
+            dc = yaml.safe_load(f) or {}
+        services = dc.get("services", {})
+        assert len(services) > 0, "Failure overlay has no services"
+        for svc, cfg in services.items():
+            assert cfg.get("restart") == "no", (
+                f"Service '{svc}' in failure overlay must have restart: 'no', "
+                f"got: {cfg.get('restart', '(not set)')}"
+            )
+
+    def test_failure_overlay_covers_all_testbed_services(self):
+        """Failure overlay must cover every service from the testbed compose."""
+        if not self.COMPOSE_FAILURE.exists():
+            pytest.skip("Failure overlay not yet created")
+        testbed_services = _load_compose_services()
+        with open(self.COMPOSE_FAILURE) as f:
+            dc = yaml.safe_load(f) or {}
+        overlay_services = set(dc.get("services", {}).keys())
+        missing = testbed_services - overlay_services
+        assert not missing, (
+            f"Failure overlay missing services: {sorted(missing)}. "
+            f"All services need restart: 'no' during failure injection."
+        )
+
+    def test_phase_d_uses_failure_overlay(self):
+        """run_phase_d.py must reference the failure overlay compose file."""
+        with open(PROJECT_ROOT / "scripts" / "run_phase_d.py") as f:
+            content = f.read()
+        assert "failure" in content.lower() and "compose" in content.lower(), (
+            "run_phase_d.py must reference the failure compose overlay"
+        )
