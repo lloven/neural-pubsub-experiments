@@ -40,7 +40,10 @@ The experiment answers three questions about distributing AI inference pipelines
 | **Number of slices** | 1, 3 | Tests slice-aware placement value |
 | **Governance** | Off, on (data sovereignty: raw data stays in originating domain) | Tests governance overhead |
 | **Federation** | Single domain, 2-domain federated | Tests cross-domain routing |
-| **Failure type** | None, eMBB worker kill, URLLC worker kill (Phase D); broker kill, network partition (Phase C) | Tests resilience mechanisms |
+| **Failure type** | None, eMBB worker kill, URLLC worker kill, funnel worker kill with wait/proceed/abort modes (Phase D); broker kill, network partition (Phase C) | Tests resilience mechanisms |
+| **Funnel mode** | wait, proceed, abort (Phase D only, D3-D5) | Tests funnel pipeline behaviour under partial input loss |
+
+**Transport note:** Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference). All phases after Phase A use HTTP exclusively.
 
 ### Dependent variables (metrics)
 
@@ -64,7 +67,7 @@ The experiment answers three questions about distributing AI inference pipelines
 | Variable | Value | Rationale |
 |----------|-------|-----------|
 | Measurement window | 30 minutes (after 10-minute warm-up) | Steady-state measurement |
-| Seeds per configuration | 5 for Phases A-C (reduces to 3 if runtime budget exceeded); 10 for Phase D | Statistical significance |
+| Seeds per configuration | 5 for all phases (reduces to 3 if runtime budget exceeded) | Statistical significance |
 | Pipeline types | CQI prediction (3-stage map-map-map, URLLC), anomaly detection (3-stage map-map-map, eMBB), sensor fusion (5-stage funnel: 3 inputs + fusion + report, multi-slice) | Representative 6G RAN use cases |
 | Embedding model | all-MiniLM-L6-v2 (pre-downloaded, CPU-only, deterministic) | Reproducibility |
 | Semantic matching | Simulated (deterministic template matching, not LLM-based) | Isolates distribution architecture; matching quality evaluated in companion Neural Router paper |
@@ -101,7 +104,9 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Method:** For small topologies (3-5 workers, 3-5 stages), brute-force all feasible placements and compare algorithm output against the true minimum cost. Reports the optimality gap (algorithm_cost / optimal_cost - 1).
 
-**Topologies tested:** Homogeneous flat, heterogeneous flat, slice-constrained (2 slices), cross-domain with governance.
+**Topologies tested:** 5 scenarios (homogeneous flat, heterogeneous flat, slice-constrained with 2 slices, cross-domain with governance, and an additional mixed scenario).
+
+**Results:** All 5 scenarios achieved gap_ratio = 0.0 (optimal placement). Results stored in `results/phase_a5_a6/`.
 
 **Runtime:** < 1 minute (pure computation, no Docker).
 
@@ -109,7 +114,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Purpose:** Validate graceful degradation under overload. Tests whether the system handles arrival rates exceeding aggregate capacity without catastrophic failure (starvation, deadlock, unbounded queue growth).
 
-**Matrix:** 3 configs x 5 seeds = 15 runs. Per run: 10-min warmup + 15-min measurement = 25 min. Total: ~6h.
+**Matrix:** 3 configs x 5 seeds = 15 runs. Per run: 2-min warmup + 10-min measurement = 12 min (~3 hours total). Supports `--warmup` and `--measurement` overrides for custom timing.
 
 | Config | Arrival rate | Workers | Expected behaviour |
 |--------|-------------|---------|-------------------|
@@ -125,7 +130,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 ### Phase B: Slice-aware placement
 
-**Purpose:** Evaluate the benefit of network-slice-aware stage placement. Tests H3 and H4.
+**Purpose:** Evaluate the benefit of network-slice-aware stage placement. Tests H3 and H4. Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference). All subsequent phases use HTTP exclusively.
 
 | Config | Slices | Governance | Failure | What it tests |
 |--------|--------|------------|---------|---------------|
@@ -133,6 +138,8 @@ The experiment answers three questions about distributing AI inference pipelines
 | B2 | 3 (URLLC, eMBB, mMTC) | Off | None | Value of slice-aware placement |
 | B3 | 3 | On | None | Governance overhead on sliced deployment |
 | B4 | 3 | On | Worker kill at t=15min | Resilience under slice constraints |
+
+**Transport:** HTTP only (orthogonality with Kafka proven in Phase B; see note above).
 
 **Matrix:** 4 configs x 1 rate (medium) x 1 complexity (3-stage) x 5 seeds = 20 runs.
 **Per run:** 40 min. **Total:** ~13h.
@@ -148,19 +155,21 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Topology:** Two domains (Domain 1: Tokyo/Nakao Lab; Domain 2: Oulu/5GTNF or emulated with calibrated WAN delay).
 
-The Neural Pub/Sub is the **broker** (semantic routing and placement), not the transport. HTTP and Kafka provide transport. Transport (HTTP vs Kafka) is validated as orthogonal in Phase B. Phase C uses HTTP throughout; the independent variables are federation and governance.
+The Neural Pub/Sub is the **broker** (semantic routing and placement), not the transport. Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference). Phase C uses HTTP exclusively; the independent variables are federation and governance.
 
 | Config | Broker | Transport | Governance | Failure |
 |--------|--------|-----------|------------|---------|
-| C1 | Static broker | HTTP | Off | None (baseline) |
+| C1 | Static broker (baseline) | HTTP | Off | None |
 | C2 | Neural broker (federated) | HTTP | Off | None |
-| C3 | Neural broker (federated) | HTTP | On | None |
+| C3 | Neural broker (federated) | HTTP | On (governance) | None |
 | C4 | Neural broker (federated) | HTTP | On | broker-d2 kill at t=15min |
 | C5 | Neural broker (federated) | HTTP | On | Federation network partition at t=15min |
 
 **Pipeline:** CQI prediction. The `collect` and `preprocess` stages must stay in the originating domain (governance); the `predict` stage can be placed in either domain.
 
 **Matrix:** 5 configs x 1 rate (medium) x 5 seeds = 25 runs.
+
+**Status:** Pending execution on distributed testbed (Nakao Lab or laptop+5GTN fallback).
 
 **Cross-site fallback:** If remote 5GTNF access is unavailable, Phase C runs on the local Docker Compose environment with calibrated WAN latency (measured Tokyo-Oulu RTT injected via `tc qdisc`). This is scientifically valid when clearly described as emulated cross-site with measured latency parameters.
 
@@ -175,22 +184,35 @@ The Neural Pub/Sub is the **broker** (semantic routing and placement), not the t
 
 **Purpose:** Systematic worker failure injection to characterise resilience at the execution-unit level. Tests H6. Answers RQ3.
 
-D1 and D2 target different slice-specific workers to test whether failure impact depends on the worker's role in the pipeline topology.
+**Transport:** HTTP only (orthogonality proven in Phase B).
+
+D1 and D2 target different slice-specific workers to test whether failure impact depends on the worker's role in the pipeline topology. D3-D5 test funnel pipeline behaviour under different `FUNNEL_MODE` settings when a contributing worker is killed.
 
 | Config | Failure type | Injection time | Expected behaviour |
 |--------|-------------|---------------|-------------------|
 | D1 | eMBB worker kill (`docker kill worker-d1-embb-1`) | t=15min | Tests recovery when an anomaly-detection worker fails. Broker health check detects failure; affected stages re-placed on surviving workers. |
 | D2 | URLLC worker kill (`docker kill worker-d1-urllc-1`) | t=15min | Tests recovery when a CQI/sensor worker fails. Broker health check detects failure; affected stages re-placed on surviving URLLC workers. |
+| D3 | Funnel wait mode (`docker kill worker-d1-urllc-2`, `FUNNEL_MODE=wait`) | t=15min | Funnel stage waits for all inputs including from recovered worker. Tests recovery latency impact on funnel pipelines. |
+| D4 | Funnel proceed mode (`docker kill worker-d1-urllc-2`, `FUNNEL_MODE=proceed`) | t=15min | Funnel stage proceeds with available inputs after timeout. Tests graceful degradation of funnel pipelines. |
+| D5 | Funnel abort mode (`docker kill worker-d1-urllc-2`, `FUNNEL_MODE=abort`) | t=15min | Funnel stage aborts pipeline on missing input. Tests fail-fast behaviour of funnel pipelines. |
 
-**Matrix:** 2 configs x 10 seeds = 20 runs.
+**Strategy dimension:** `--strategy S1|S2|S3|all`
+- Default: S3 only (for D3/D4/D5 funnel tests)
+- For H6 comparison: `--strategy all` with D1,D2 runs S1/S2/S3 x 2 configs x 5 seeds = 30 runs
+- Funnel tests: 3 configs (D3/D4/D5) x 5 seeds = 15 runs
+- **Total: 45 runs** (30 for H6 comparison + 15 for funnel tests)
 
 Federation-level failures (broker kill, network partition) are tested in Phase C configs C4-C5, which provide the cross-domain traffic necessary for meaningful treatment effects.
+
+**Recovery analysis:** Post-hoc recovery time metrics are computed by `scripts/analyze_recovery.py` from Phase D data, reporting: detection_time, recovery_time, degradation_depth, and failed_pipelines.
 
 **Expected outputs:**
 - Recovery timeline plots per failure type (time to detect, time to re-route, pipeline success rate)
 - Pipeline completion rate: before, during (30s window around failure), and after recovery
 - Comparison of recovery time across worker roles (eMBB vs. URLLC)
 - Comparison of recovery time vs. configuration parameters (health check interval, propagation interval)
+- Funnel mode comparison: completion rate, latency, and data completeness across wait/proceed/abort modes
+- Strategy comparison (S1/S2/S3) for D1-D2: recovery behaviour under different placement strategies
 
 ### Phase E: Scaling study (simulation)
 
@@ -297,12 +319,12 @@ Results are exported as CSV via the broker's `/metrics/export` endpoint or by th
 
 ### Statistical approach
 
-- Each configuration runs with 5 independent random seeds (Phase D uses 10 seeds for greater statistical power on recovery-time analysis)
+- Each configuration runs with 5 independent random seeds
 - **Reporting:** Latency reported as median with interquartile range (IQR) across seeds. CDFs constructed from all pipeline instances pooled across seeds (>1000 data points per configuration)
-- **Hypothesis tests:** Seed-level aggregate statistics are the unit of analysis (n=5 or n=10), ensuring independence. Pairwise distribution comparisons use the two-sample Kolmogorov-Smirnov (KS) test with Holm-Bonferroni correction for the three planned contrasts per metric (S4 vs. S1, S4 vs. S2, S4 vs. S3). Exact p-values reported
+- **Hypothesis tests:** Seed-level aggregate statistics are the unit of analysis (n=5), ensuring independence. Pairwise distribution comparisons use the two-sample Kolmogorov-Smirnov (KS) test with Holm-Bonferroni correction for the three planned contrasts per metric (S4 vs. S1, S4 vs. S2, S4 vs. S3). Exact p-values reported
 - **Effect sizes:** Vargha-Delaney A_12 statistic for all pairwise comparisons (A_12 = 0.5 = no effect; A_12 >= 0.71 = large effect). Wasserstein distance (earth-mover distance, in ms) as an interpretable measure of CDF separation
 - **Confidence intervals:** Bootstrap 95% CIs (10,000 resamples) for median and p95 latency, computed from pooled pipeline instances
-- **Phase D recovery times:** Per-event (one failure per seed). With n=10, use one-sample Wilcoxon signed-rank test against the 2x summary_interval threshold
+- **Phase D recovery times:** Per-event (one failure per seed). With n=5, use one-sample Wilcoxon signed-rank test against the 2x summary_interval threshold
 - **Multiple comparison correction:** Holm-Bonferroni for planned contrasts. When comparing all 4 strategies (6 pairwise tests), apply Holm-Bonferroni across all 6. When comparing S4 against each baseline (3 contrasts), apply across 3 only
 
 ### Run ordering
@@ -332,7 +354,7 @@ The experiment must produce data sufficient to evaluate all six hypotheses:
 | Slice-aware placement reduces latency (H3) | Phase B | B2 p95 < B1 p95 with p < 0.05 |
 | Governance overhead is bounded (H4) | Phase B, C | Report B3/B2 and C3/C2 latency ratios with confidence intervals |
 | Federation scales linearly (H5) | Phase C, E | If Phase E completed: summary bandwidth proportional to domain count under hierarchical topology. If not: report 2-domain overhead and state scaling as conjecture |
-| Recovery within bounded time (H6) | Phase C, D | Report detection time and re-placement time separately (10 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D2 (worker failures) and C4-C5 (federation failures) |
+| Recovery within bounded time (H6) | Phase C, D | Report detection time and re-placement time separately (5 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D2 (worker failures) and C4-C5 (federation failures). Strategy comparison (S1/S2/S3) for D1-D2 via `--strategy all`. Funnel mode comparison (D3-D5) reports completion rate and data completeness |
 
 ## 10. Reproducibility
 

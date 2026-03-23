@@ -16,8 +16,8 @@ Phase A.6 (contention):
   | A6.2   | 50/s (5x capacity)  |       5 | Saturation, measure failure rate       |
   | A6.3   | 10/s (at capacity)  |   5->3  | Dynamic contention from worker loss    |
 
-  Each config: 10-min warmup + 15-min measurement = 25 min.
-  Matrix: 3 configs x 5 seeds = 15 runs. Total: ~6h.
+  Each config: 2-min warmup + 10-min measurement = 12 min.
+  Matrix: 3 configs x 5 seeds = 15 runs. Total: ~3h.
 
 Usage:
     python scripts/run_phase_a5_a6.py --dry-run
@@ -167,15 +167,23 @@ class ContentionRunConfig:
     seed: int
     failure: str | None = None
     warmup_s: int = 120
-    measurement_s: int = 900
+    measurement_s: int = 600
+    failure_delay_s: int = 300  # 5min from run start; consistent with Phase D
 
 
 def build_contention_matrix(
     configs: list[str],
     seeds: list[int],
+    warmup_s: int | None = None,
+    measurement_s: int | None = None,
 ) -> list[ContentionRunConfig]:
-    """Build the Phase A.6 run matrix."""
+    """Build the Phase A.6 run matrix.  Optional timing overrides for smoke tests."""
     runs = []
+    overrides = {}
+    if warmup_s is not None:
+        overrides["warmup_s"] = warmup_s
+    if measurement_s is not None:
+        overrides["measurement_s"] = measurement_s
     for config_name, seed in itertools.product(configs, seeds):
         cfg = CONTENTION_CONFIGS[config_name]
         runs.append(ContentionRunConfig(
@@ -184,6 +192,7 @@ def build_contention_matrix(
             n_workers=cfg["n_workers"],
             seed=seed,
             failure=cfg["failure"],
+            **overrides,
         ))
     return runs
 
@@ -214,14 +223,16 @@ def _run_contention(run: ContentionRunConfig, dry_run: bool) -> dict:
 
     failure_fn = None
     if run.failure == FAILURE_KILL_WORKERS:
-        # Kill 2 workers 5 minutes into the run (after warmup starts)
+        # Kill 2 workers at failure_delay_s into the run
+        failure_delay = run.failure_delay_s
+
         def _kill_workers():
             inject_compose_kill(
                 project_name=f"npubsub-{run_id}",
                 compose_file=COMPOSE_FILE,
                 env=env,
                 target="worker",
-                delay_s=300,
+                delay_s=failure_delay,
                 label="contention-worker-kill",
             )
         failure_fn = _kill_workers
@@ -261,6 +272,10 @@ def main():
         "--seeds", default=",".join(str(s) for s in DEFAULT_SEEDS),
         help=f"Comma-separated seeds (default: {DEFAULT_SEEDS})",
     )
+    parser.add_argument("--warmup", type=int, default=None,
+                        help="Override warmup_s (default: 120)")
+    parser.add_argument("--measurement", type=int, default=None,
+                        help="Override measurement_s (default: 600)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING"])
 
     args = parser.parse_args()
@@ -289,7 +304,11 @@ def main():
                     f"Unknown config: {c}. Valid: {list(CONTENTION_CONFIGS.keys())}"
                 )
 
-        runs = build_contention_matrix(config_names, seeds)
+        runs = build_contention_matrix(
+            config_names, seeds,
+            warmup_s=args.warmup,
+            measurement_s=args.measurement,
+        )
         logger.info("Phase A.6: %d runs planned", len(runs))
 
         if args.dry_run:
