@@ -309,6 +309,7 @@ def inject_compose_kill(
     target: str,
     delay_s: int,
     label: str = "service",
+    compose_files: list[Path] | None = None,
 ) -> None:
     """Sleep *delay_s* seconds, then ``docker compose kill <target>``.
 
@@ -316,11 +317,15 @@ def inject_compose_kill(
 
     Args:
         project_name: Docker Compose project name.
-        compose_file: Path to the docker-compose YAML file.
+        compose_file: Path to the docker-compose YAML file (used when
+            *compose_files* is None).
         env: Environment variable overrides.
-        target: Compose service name to kill (e.g., ``"worker"``).
+        target: Compose service name to kill (e.g., ``"worker-d1-embb-1"``).
         delay_s: Seconds to wait before injecting the failure.
         label: Human-readable label for log messages (e.g., ``"broker"``).
+        compose_files: Optional list of compose file paths (base + overlays).
+            Must match the files used in ``compose_up`` so that the kill
+            command can find the service.
     """
     logger.info(
         "Failure thread [%s]: waiting %ds before killing %s",
@@ -329,10 +334,14 @@ def inject_compose_kill(
     time.sleep(delay_s)
     logger.info("Injecting %s failure: docker compose kill %s", label, target)
     compose_env = {**os.environ, **env}
+    files = compose_files or [compose_file]
+    file_args = []
+    for f in files:
+        file_args.extend(["-f", str(f)])
     try:
         subprocess.run(
             [
-                "docker", "compose", "-f", str(compose_file),
+                "docker", "compose", *file_args,
                 "-p", project_name,
                 "kill", target,
             ],
