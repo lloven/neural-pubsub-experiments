@@ -75,9 +75,19 @@ class RunConfig:
 def build_run_matrix(
     configs: list[str],
     seeds: list[int],
+    warmup_s: int | None = None,
+    measurement_s: int | None = None,
+    failure_delay_s: int | None = None,
 ) -> list[RunConfig]:
-    """Build the run matrix."""
+    """Build the run matrix.  Optional timing overrides for smoke tests."""
     runs = []
+    overrides = {}
+    if warmup_s is not None:
+        overrides["warmup_s"] = warmup_s
+    if measurement_s is not None:
+        overrides["measurement_s"] = measurement_s
+    if failure_delay_s is not None:
+        overrides["failure_delay_s"] = failure_delay_s
     for config_name, seed in itertools.product(configs, seeds):
         cfg = CONFIGS[config_name]
         runs.append(RunConfig(
@@ -85,6 +95,7 @@ def build_run_matrix(
             seed=seed,
             failure_type=cfg["failure_type"],
             failure_target=cfg["failure_target"],
+            **overrides,
         ))
     return runs
 
@@ -167,6 +178,25 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
     )
 
 
+def _extra_args(parser):
+    """Add Phase D timing overrides for smoke tests."""
+    parser.add_argument("--warmup", type=int, default=None,
+                        help="Override warmup_s (default: 120)")
+    parser.add_argument("--measurement", type=int, default=None,
+                        help="Override measurement_s (default: 600)")
+    parser.add_argument("--failure-delay", type=int, default=None,
+                        help="Override failure_delay_s (default: 300)")
+
+
+def _parse_extra(args):
+    """Pass timing overrides to build_run_matrix."""
+    return dict(
+        warmup_s=args.warmup,
+        measurement_s=args.measurement,
+        failure_delay_s=args.failure_delay,
+    )
+
+
 def main():
     phase_main(
         phase_name="Phase D",
@@ -176,6 +206,8 @@ def main():
         run_fn=_run,
         results_dir=RESULTS_DIR,
         default_seeds=EXTENDED_SEEDS,
+        extra_args_fn=_extra_args,
+        parse_extra_fn=_parse_extra,
     )
 
 
