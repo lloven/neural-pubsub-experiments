@@ -6,9 +6,17 @@ Systematically tests worker failure injection and measures recovery:
         anomaly-detection worker fails
   D2 -- URLLC worker failure: kill a URLLC worker, tests recovery when a
         CQI/sensor worker fails
+  D3 -- Funnel resilience (wait): kill a sensor-input worker with funnel
+        mode=wait. Pipeline stalls until timeout.
+  D4 -- Funnel resilience (proceed): kill a sensor-input worker with funnel
+        mode=proceed. Pipeline completes with partial inputs.
+  D5 -- Funnel resilience (abort): kill a sensor-input worker with funnel
+        mode=abort. Pipeline fails immediately.
 
 D1 and D2 target different slice-specific workers to test whether failure
-impact depends on the worker's role.
+impact depends on the worker's role. D3/D4/D5 target the same sensor-input
+worker (worker-d1-urllc-2) with different funnel resilience modes to test
+the funnel pattern's fault-tolerance behavior (Section 4.4.3).
 
 Federation-level failures (broker kill, network partition) are tested in
 Phase C configs C4-C5, which provide the cross-domain traffic necessary
@@ -23,6 +31,9 @@ Outputs CSV results to results/phase_d/.
 Usage:
     python scripts/run_phase_d.py [--dry-run] [--seeds 42,123,456,789,0]
     python scripts/run_phase_d.py --configs D1,D2 --seeds 42
+    python scripts/run_phase_d.py --strategy S1          # round-robin only
+    python scripts/run_phase_d.py --strategy all          # S1+S2+S3 comparison
+    python scripts/run_phase_d.py --strategy S1,S2,S3     # same as 'all'
 """
 
 from __future__ import annotations
@@ -35,7 +46,6 @@ from pathlib import Path
 
 from scripts._common import (
     COMPOSE_FILE,
-    PROJECT_ROOT,
     EXTENDED_SEEDS,
     PROJECT_ROOT,
     inject_compose_kill,
@@ -55,7 +65,47 @@ COMPOSE_FAILURE = PROJECT_ROOT / "docker-compose.failure.yaml"
 CONFIGS = {
     "D1": {"failure_type": "worker", "failure_target": "worker-d1-embb-1"},
     "D2": {"failure_type": "worker", "failure_target": "worker-d1-urllc-1"},
+    # Funnel resilience modes (Section 4.4.3): kill a sensor-input worker
+    # feeding the fuse stage of the sensor_fusion pipeline with each mode.
+    # Target: worker-d1-urllc-2 (distinct from D1/D2 targets).
+    # pipeline_mix_fusion=1.0 ensures only sensor_fusion pipelines are submitted.
+    "D3": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
+            "funnel_mode": "wait", "pipeline_mix_fusion": "1.0"},
+    "D4": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
+            "funnel_mode": "proceed", "pipeline_mix_fusion": "1.0"},
+    "D5": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
+            "funnel_mode": "abort", "pipeline_mix_fusion": "1.0"},
 }
+
+# Placement strategies (mirrors Phase A naming: S1=round-robin, S2=random, S3=neural).
+# S1/S2 use the static broker with a placement algorithm; S3 uses the default neural broker.
+STRATEGIES = {
+    "S1": {"placement": "round_robin"},
+    "S2": {"placement": "random"},
+    "S3": {"placement": "neural"},
+}
+
+
+def _strategy_env(strategy: str) -> dict[str, str]:
+    """Return environment variable overrides for the given strategy.
+
+    S1 (round-robin) and S2 (random) override BROKER_MODULE to use the
+    static broker and set PLACEMENT accordingly.  S3 (neural) uses the
+    default neural broker (no BROKER_MODULE override) and sets
+    PLACEMENT_STRATEGY=neural for downstream compatibility.
+    """
+    if strategy not in STRATEGIES:
+        raise ValueError(f"Unknown strategy: {strategy}. Valid: {sorted(STRATEGIES.keys())}")
+    placement = STRATEGIES[strategy]["placement"]
+    if placement in ("round_robin", "random"):
+        return {
+            "BROKER_MODULE": "src.broker.static_broker",
+            "PLACEMENT": placement,
+            "PLACEMENT_STRATEGY": placement,
+        }
+    else:
+        # Neural: default broker, no BROKER_MODULE override
+        return {"PLACEMENT_STRATEGY": "neural"}
 
 
 @dataclass
@@ -65,13 +115,14 @@ class RunConfig:
     seed: int
     failure_type: str
     failure_target: str
+    strategy: str = "S3"
     warmup_s: int = 120
     measurement_s: int = 600
     failure_delay_s: int = 300  # 5min from run start (3min into measurement), consistent with B4
 
     @property
     def run_id(self) -> str:
-        return f"{self.config_name}_failure-{self.failure_type}_seed-{self.seed}"
+        return f"{self.config_name}_failure-{self.failure_type}_{self.strategy}_seed-{self.seed}"
 
 
 def build_run_matrix(
@@ -80,8 +131,16 @@ def build_run_matrix(
     warmup_s: int | None = None,
     measurement_s: int | None = None,
     failure_delay_s: int | None = None,
+    strategies: list[str] | None = None,
 ) -> list[RunConfig]:
-    """Build the run matrix.  Optional timing overrides for smoke tests."""
+    """Build the run matrix.  Optional timing overrides for smoke tests.
+
+    Args:
+        strategies: List of strategy labels (e.g. ["S1", "S2", "S3"]).
+            Defaults to ["S3"] (neural only, preserving current behavior).
+    """
+    if strategies is None:
+        strategies = ["S3"]
     runs = []
     overrides = {}
     if warmup_s is not None:
@@ -90,13 +149,14 @@ def build_run_matrix(
         overrides["measurement_s"] = measurement_s
     if failure_delay_s is not None:
         overrides["failure_delay_s"] = failure_delay_s
-    for config_name, seed in itertools.product(configs, seeds):
+    for config_name, strategy, seed in itertools.product(configs, strategies, seeds):
         cfg = CONFIGS[config_name]
         runs.append(RunConfig(
             config_name=config_name,
             seed=seed,
             failure_type=cfg["failure_type"],
             failure_target=cfg["failure_target"],
+            strategy=strategy,
             **overrides,
         ))
     return runs
@@ -138,20 +198,34 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
     project_name = f"npubsub-{run_id.lower().replace('_', '-')}"
 
     logger.info(
-        "Run: %s (failure=%s, target=%s, seed=%d, "
+        "Run: %s (failure=%s, target=%s, strategy=%s, seed=%d, "
         "inject_at=%ds, duration=%ds)",
-        run_id, run.failure_type, run.failure_target,
+        run_id, run.failure_type, run.failure_target, run.strategy,
         run.seed, run.failure_delay_s, total_duration,
     )
 
+    # Look up config-level overrides (funnel mode, pipeline mix)
+    cfg = CONFIGS[run.config_name]
+    pipeline_mix_fusion = cfg.get("pipeline_mix_fusion", "0.0")
+    # When fusion is 1.0, the other mixes must be 0.0
+    if pipeline_mix_fusion != "0.0":
+        mix_cqi = "0.0"
+        mix_anomaly = "0.0"
+    else:
+        mix_cqi = "0.5"
+        mix_anomaly = "0.5"
+
+    # Strategy env vars (S1=round-robin, S2=random, S3=neural)
+    strat_env = _strategy_env(run.strategy)
+
     env = {
-        "PLACEMENT_STRATEGY": "neural",
+        **strat_env,
         "ARRIVAL_RATE": "5.0",
         "DURATION_S": str(total_duration),
         "SEED": str(run.seed),
-        "PIPELINE_MIX_CQI": "0.5",
-        "PIPELINE_MIX_ANOMALY": "0.5",
-        "PIPELINE_MIX_FUSION": "0.0",
+        "PIPELINE_MIX_CQI": mix_cqi,
+        "PIPELINE_MIX_ANOMALY": mix_anomaly,
+        "PIPELINE_MIX_FUSION": pipeline_mix_fusion,
         "WARMUP_S": str(run.warmup_s),
         "FEDERATION_ENABLED": "true",
         "GOVERNANCE_ENABLED": "true",
@@ -159,6 +233,11 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         "FAILURE_TYPE": run.failure_type,
         "FAILURE_DELAY_S": str(run.failure_delay_s),
     }
+
+    # Funnel resilience mode (Section 4.4.3): passed to broker containers
+    funnel_mode = cfg.get("funnel_mode")
+    if funnel_mode is not None:
+        env["FUNNEL_MODE"] = funnel_mode
 
     # Phase D uses the failure compose overlay to disable restart: unless-stopped.
     # Without this, Docker auto-restarts killed containers, making injection invisible.
@@ -181,21 +260,35 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
 
 
 def _extra_args(parser):
-    """Add Phase D timing overrides for smoke tests."""
+    """Add Phase D timing overrides and strategy selection."""
     parser.add_argument("--warmup", type=int, default=None,
                         help="Override warmup_s (default: 120)")
     parser.add_argument("--measurement", type=int, default=None,
                         help="Override measurement_s (default: 600)")
     parser.add_argument("--failure-delay", type=int, default=None,
                         help="Override failure_delay_s (default: 300)")
+    parser.add_argument(
+        "--strategy", default="S3",
+        help="Placement strategy: S1 (round-robin), S2 (random), S3 (neural, default), or 'all'",
+    )
 
 
 def _parse_extra(args):
-    """Pass timing overrides to build_run_matrix."""
+    """Pass timing overrides and strategy list to build_run_matrix."""
+    if args.strategy.lower() == "all":
+        strategies = list(STRATEGIES.keys())
+    else:
+        strategies = [s.strip() for s in args.strategy.split(",")]
+        for s in strategies:
+            if s not in STRATEGIES:
+                raise SystemExit(
+                    f"Unknown strategy: {s}. Valid: {sorted(STRATEGIES.keys())} or 'all'"
+                )
     return dict(
         warmup_s=args.warmup,
         measurement_s=args.measurement,
         failure_delay_s=args.failure_delay,
+        strategies=strategies,
     )
 
 
