@@ -1,0 +1,27 @@
+# Phase D failure injection overlay.
+# Disables restart policy so `docker compose kill <service>` actually kills
+# the container permanently (not auto-restarted by Docker).
+#
+# Usage: docker compose -f docker-compose.local.yaml \
+#                       -f docker-compose.testbed.yaml \
+#                       -f docker-compose.failure.yaml up
+#
+# See L38 (verify treatments) and L39 (no silent injection errors).
+
+services:
+  broker-d1:
+    restart: "no"
+  broker-d2:
+    restart: "no"
+  worker-d1-urllc-1:
+    restart: "no"
+  worker-d1-urllc-2:
+    restart: "no"
+  worker-d1-embb-1:
+    restart: "no"
+  worker-d2-embb-1:
+    restart: "no"
+  worker-d2-embb-2:
+    restart: "no"
+  workload:
+    restart: "no"
