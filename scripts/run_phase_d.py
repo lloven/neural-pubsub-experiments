@@ -61,6 +61,10 @@ class RunConfig:
     measurement_s: int = 600
     failure_delay_s: int = 300  # 5min from run start (3min into measurement), consistent with B4
 
+    @property
+    def run_id(self) -> str:
+        return f"{self.config_name}_failure-{self.failure_type}_seed-{self.seed}"
+
 
 def build_run_matrix(
     configs: list[str],
@@ -117,7 +121,7 @@ def _make_failure_fn(
 
 
 def _run(run: RunConfig, dry_run: bool) -> dict:
-    run_id = f"{run.config_name}_failure-{run.failure_type}_seed-{run.seed}"
+    run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     project_name = f"npubsub-{run_id}"
 

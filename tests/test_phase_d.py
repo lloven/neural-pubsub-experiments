@@ -72,6 +72,48 @@ class TestPhaseDMatrix:
             assert "failure_target" in cfg, f"{name} missing failure_target"
 
 
+class TestPhaseDRunId:
+    """Each RunConfig must have a unique run_id for resume to work correctly."""
+
+    def test_run_id_property_exists(self):
+        """RunConfig must expose a run_id property (not just config_name)."""
+        rc = RunConfig(
+            config_name="D1", seed=42,
+            failure_type="worker", failure_target="worker",
+        )
+        assert hasattr(rc, 'run_id'), "RunConfig must have a run_id property"
+
+    def test_run_id_includes_seed(self):
+        """run_id must distinguish different seeds of the same config."""
+        rc1 = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
+        rc2 = RunConfig(config_name="D1", seed=123, failure_type="worker", failure_target="worker")
+        assert rc1.run_id != rc2.run_id, "Different seeds must have different run_ids"
+
+    def test_run_id_includes_failure_type(self):
+        """run_id must include the failure type for clarity."""
+        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
+        assert "worker" in rc.run_id
+
+    def test_run_id_matches_run_function_format(self):
+        """run_id property must match the format used in _run()."""
+        rc = RunConfig(config_name="D1", seed=42, failure_type="worker", failure_target="worker")
+        expected = f"{rc.config_name}_failure-{rc.failure_type}_seed-{rc.seed}"
+        assert rc.run_id == expected, f"Expected '{expected}', got '{rc.run_id}'"
+
+    def test_all_d1_seeds_have_unique_run_ids(self):
+        """All 10 D1 seeds must produce unique run_ids for resume tracking."""
+        matrix = build_run_matrix(["D1"], EXTENDED_SEEDS)
+        run_ids = [r.run_id for r in matrix]
+        assert len(run_ids) == len(set(run_ids)), f"Duplicate run_ids: {run_ids}"
+
+    def test_full_matrix_unique_run_ids(self):
+        """All 40 runs in the full matrix must have unique run_ids."""
+        matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
+        run_ids = [r.run_id for r in matrix]
+        assert len(run_ids) == 40
+        assert len(set(run_ids)) == 40, f"Duplicate run_ids found"
+
+
 class TestPhaseDDefaultSeeds:
     """Phase D should default to 10 extended seeds for recovery-time analysis."""
 
