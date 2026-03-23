@@ -170,6 +170,7 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         dry_run=dry_run,
         failure_fn=failure_fn,
         compose_files=compose_files,
+        detached=True,  # Don't abort when killed container exits (L38)
     )
 
 
