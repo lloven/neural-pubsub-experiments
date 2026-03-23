@@ -55,9 +55,9 @@ class TestPhaseDMatrix:
         )
 
     def test_full_matrix_size(self):
-        """4 configs × 10 seeds = 40 runs."""
+        """3 configs × 10 seeds = 30 runs."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        assert len(matrix) == 40, f"Expected 40 runs, got {len(matrix)}"
+        assert len(matrix) == 30, f"Expected 30 runs, got {len(matrix)}"
 
     def test_single_config_matrix(self):
         """Single config × 5 default seeds = 5 runs."""
@@ -107,11 +107,51 @@ class TestPhaseDRunId:
         assert len(run_ids) == len(set(run_ids)), f"Duplicate run_ids: {run_ids}"
 
     def test_full_matrix_unique_run_ids(self):
-        """All 40 runs in the full matrix must have unique run_ids."""
+        """All 30 runs in the full matrix must have unique run_ids."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
         run_ids = [r.run_id for r in matrix]
-        assert len(run_ids) == 40
-        assert len(set(run_ids)) == 40, f"Duplicate run_ids found"
+        assert len(run_ids) == 30
+        assert len(set(run_ids)) == 30, f"Duplicate run_ids found"
+
+
+class TestPhaseDNoD2:
+    """D2 (broker-d1 kill) was removed: killing the only broker that receives
+    all traffic is a trivial total outage, not an interesting resilience
+    experiment.  Phase D now has 3 configs: D1, D3, D4."""
+
+    def test_configs_has_exactly_three_entries(self):
+        """Phase D must have exactly 3 configs after D2 removal."""
+        assert len(CONFIGS) == 3, (
+            f"Expected 3 configs (D1, D3, D4), got {len(CONFIGS)}: "
+            f"{sorted(CONFIGS.keys())}"
+        )
+
+    def test_d2_not_in_configs(self):
+        """D2 must not be present in CONFIGS."""
+        assert "D2" not in CONFIGS, (
+            "D2 (broker-d1 kill) should be removed: killing the only broker "
+            "that receives all traffic is a trivial total outage."
+        )
+
+    def test_full_matrix_size_is_30(self):
+        """3 configs x 10 seeds = 30 runs (was 40 with D2)."""
+        matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
+        assert len(matrix) == 30, f"Expected 30 runs, got {len(matrix)}"
+
+    def test_no_d2_run_ids_generated(self):
+        """No run_id in the full matrix should start with 'D2'."""
+        matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
+        d2_runs = [r for r in matrix if r.run_id.startswith("D2")]
+        assert len(d2_runs) == 0, (
+            f"Found {len(d2_runs)} D2 run_ids but D2 should be removed: "
+            f"{[r.run_id for r in d2_runs]}"
+        )
+
+    def test_remaining_configs_are_d1_d3_d4(self):
+        """After D2 removal, exactly D1, D3, D4 must remain."""
+        assert set(CONFIGS.keys()) == {"D1", "D3", "D4"}, (
+            f"Expected configs {{D1, D3, D4}}, got {set(CONFIGS.keys())}"
+        )
 
 
 class TestPhaseDDefaultSeeds:

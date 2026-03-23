@@ -68,14 +68,7 @@ class TestFailureTargetsMatchCompose:
             f"{sorted(services)}"
         )
 
-    def test_d2_broker_target_is_real_service(self):
-        """D2 (broker failure) target must be an actual compose service."""
-        services = _load_compose_services()
-        target = CONFIGS["D2"]["failure_target"]
-        assert target in services, (
-            f"D2 failure_target '{target}' not found in compose services: "
-            f"{sorted(services)}"
-        )
+    # D2 test removed: D2 (broker-d1 kill) dropped from Phase D (L41).
 
     def test_d3_network_target_is_real_network(self):
         """D3 (network failure) target must be an actual compose network."""
@@ -294,8 +287,8 @@ class TestProjectNameConsistency:
         """Docker project names must be lowercase with hyphens (no underscores)."""
         from scripts.run_phase_d import RunConfig
         rc = RunConfig(
-            config_name="D2", seed=789,
-            failure_type="broker", failure_target="broker-d1",
+            config_name="D3", seed=789,
+            failure_type="network", failure_target="federation",
         )
         run_id = rc.run_id
         project = f"npubsub-{run_id.lower().replace('_', '-')}"
@@ -304,73 +297,12 @@ class TestProjectNameConsistency:
 
 
 # ---------------------------------------------------------------------------
-# 7. D2 broker failure must target the critical-path broker
+# 7. D2 broker failure tests removed
 # ---------------------------------------------------------------------------
-
-class TestD2BrokerOnCriticalPath:
-    """D2 (broker failure) must kill a broker that the workload actually uses.
-
-    The workload submits all pipelines to broker-d1 (via --broker-url).
-    Killing broker-d2 has zero observable effect because it is not on the
-    critical path for pipeline submission. The correct target is broker-d1.
-
-    See L38: every experiment that claims to test an effect must verify the
-    effect actually occurred.
-    """
-
-    def _get_workload_broker(self) -> str:
-        """Parse the workload's --broker-url from docker-compose.local.yaml."""
-        with open(COMPOSE_LOCAL) as f:
-            dc = yaml.safe_load(f) or {}
-        workload_cmd = dc["services"]["workload"]["command"]
-        # Extract broker hostname from --broker-url http://HOSTNAME:PORT
-        import re
-        match = re.search(r"--broker-url\s+http://([^:]+):", workload_cmd)
-        assert match, f"Cannot parse --broker-url from workload command: {workload_cmd}"
-        return match.group(1)
-
-    def test_d2_targets_the_workload_broker(self):
-        """D2 failure target must be the broker that receives workload traffic.
-
-        The workload sends all pipelines to broker-d1. Killing any other
-        broker (e.g. broker-d2) has no observable effect on pipeline
-        completion or latency, making the treatment vacuous (L38).
-        """
-        workload_broker = self._get_workload_broker()
-        d2_target = CONFIGS["D2"]["failure_target"]
-        assert d2_target == workload_broker, (
-            f"D2 targets '{d2_target}' but workload sends to '{workload_broker}'. "
-            f"Killing a broker that is NOT on the critical path produces zero "
-            f"treatment effect. D2 must target '{workload_broker}'."
-        )
-
-    def test_d2_target_is_on_workload_net(self):
-        """The D2 failure target must be on the workload-net network,
-        proving it handles workload traffic."""
-        with open(COMPOSE_LOCAL) as f:
-            dc = yaml.safe_load(f) or {}
-        d2_target = CONFIGS["D2"]["failure_target"]
-        target_networks = dc["services"].get(d2_target, {}).get("networks", [])
-        assert "workload-net" in target_networks, (
-            f"D2 target '{d2_target}' is not on workload-net "
-            f"(networks: {target_networks}). It cannot be on the critical "
-            f"path for pipeline submission."
-        )
-
-    def test_d2_target_receives_all_pipeline_submissions(self):
-        """The D2 target broker must be the one receiving /publish requests.
-
-        In the current topology, the workload POSTs to broker-d1. The D2
-        broker failure target must match this broker so that killing it
-        causes pipeline failures (timeouts, HTTP errors, throughput drop).
-        """
-        workload_broker = self._get_workload_broker()
-        d2_target = CONFIGS["D2"]["failure_target"]
-        # The workload broker is the single entry point for ALL pipelines
-        assert d2_target == workload_broker, (
-            f"D2 kills '{d2_target}' but all /publish requests go to "
-            f"'{workload_broker}'. Treatment has zero effect."
-        )
+# D2 (broker-d1 kill) was dropped from Phase D: killing the only broker that
+# receives all traffic is a trivial total outage, not an interesting
+# resilience experiment (L41). The TestD2BrokerOnCriticalPath class that
+# validated D2's target has been removed.
 
 
 # ---------------------------------------------------------------------------
