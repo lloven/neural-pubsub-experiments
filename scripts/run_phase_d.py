@@ -3,19 +3,21 @@
 
 Systematically tests failure injection and measures recovery:
   D1 -- Execution unit (worker) failure: kill a worker, measure re-placement time
-  D2 -- Broker failure: kill domain broker, measure proxy recovery
   D3 -- Network partition: disconnect federation network, measure degradation
   D4 -- Sensor-worker (URLLC) failure: kill URLLC worker, measure CQI pipeline degradation
 
+D2 (broker-d1 kill) was removed: killing the only broker that receives all
+traffic is a trivial total outage, not an interesting resilience experiment (L41).
+
 Per test:
-  5 runs, inject failure at t=15min, measure recovery time and pipeline
+  10 runs, inject failure at t=15min, measure recovery time and pipeline
   completion rate.
 
 Outputs CSV results to results/phase_d/.
 
 Usage:
     python scripts/run_phase_d.py [--dry-run] [--seeds 42,123,456,789,0]
-    python scripts/run_phase_d.py --configs D1,D2 --seeds 42
+    python scripts/run_phase_d.py --configs D1,D3 --seeds 42
 """
 
 from __future__ import annotations
@@ -47,7 +49,8 @@ COMPOSE_FAILURE = PROJECT_ROOT / "docker-compose.failure.yaml"
 # Validated by tests/test_failure_targets.py against compose YAML files.
 CONFIGS = {
     "D1": {"failure_type": "worker", "failure_target": "worker-d1-embb-1"},
-    "D2": {"failure_type": "broker", "failure_target": "broker-d1"},
+    # D2 removed: killing the only broker (broker-d1) that receives all traffic
+    # is a trivial total outage, not an interesting resilience experiment (L41).
     "D3": {"failure_type": "network", "failure_target": "federation"},
     "D4": {"failure_type": "worker", "failure_target": "worker-d1-urllc-1"},
 }
