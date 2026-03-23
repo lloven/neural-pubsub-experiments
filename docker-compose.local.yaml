@@ -10,12 +10,17 @@
 #   slice-URLLC-d1  -- Near-RT RIC slice, domain 1 (broker-d1 + URLLC workers)
 #   slice-eMBB-d1   -- Edge/eMBB slice, domain 1   (broker-d1 + eMBB workers)
 #   slice-eMBB-d2   -- Edge/eMBB slice, domain 2   (broker-d2 + eMBB workers)
-#   federation      -- Cross-domain overlay (brokers + workload generator)
+#   workload-net    -- Workload-to-broker link      (workload + broker-d1)
+#   federation      -- Cross-domain overlay          (broker-d1 + broker-d2)
 #
-# The workload generator connects to broker-d1 via the federation network and
-# submits pipelines at a configurable Poisson arrival rate. Broker-d1 places
-# stages locally or forwards cross-domain to broker-d2 via federation.
-# Brokers exchange subscription summaries over the federation network.
+# The workload generator connects to broker-d1 via workload-net and submits
+# pipelines at a configurable Poisson arrival rate. Broker-d1 places stages
+# locally or forwards cross-domain to broker-d2 via federation. Brokers
+# exchange subscription summaries over the federation network.
+#
+# Network isolation: workload-net is separate from federation so that D3
+# (network partition) can disconnect federation without breaking result
+# collection. The workload never needs direct access to the federation.
 #
 # Environment variables (with defaults):
 #   ARRIVAL_RATE (5.0)  -- workload arrival rate (pipelines/s)
@@ -44,6 +49,7 @@ services:
       - slice-URLLC-d1
       - slice-eMBB-d1
       - federation
+      - workload-net
     ports:
       - "8080:8080"
     volumes:
@@ -181,7 +187,7 @@ services:
     volumes:
       - ./results:/app/results
     networks:
-      - federation
+      - workload-net
     depends_on:
       broker-d1:
         condition: service_healthy
@@ -194,6 +200,8 @@ networks:
   slice-eMBB-d1:
     internal: true
   slice-eMBB-d2:
+    internal: true
+  workload-net:
     internal: true
   federation:
     internal: false

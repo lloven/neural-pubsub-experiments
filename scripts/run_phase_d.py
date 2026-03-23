@@ -5,7 +5,7 @@ Systematically tests failure injection and measures recovery:
   D1 -- Execution unit (worker) failure: kill a worker, measure re-placement time
   D2 -- Broker failure: kill domain broker, measure proxy recovery
   D3 -- Network partition: disconnect federation network, measure degradation
-  D4 -- Funnel partial input: kill subset of sensor workers, test wait/proceed/abort
+  D4 -- Sensor-worker (URLLC) failure: kill URLLC worker, measure CQI pipeline degradation
 
 Per test:
   5 runs, inject failure at t=15min, measure recovery time and pipeline
@@ -33,7 +33,6 @@ from scripts._common import (
     PROJECT_ROOT,
     inject_compose_kill,
     inject_network_partition,
-    inject_scale_down,
     phase_main,
     run_single,
 )
@@ -48,9 +47,9 @@ COMPOSE_FAILURE = PROJECT_ROOT / "docker-compose.failure.yaml"
 # Validated by tests/test_failure_targets.py against compose YAML files.
 CONFIGS = {
     "D1": {"failure_type": "worker", "failure_target": "worker-d1-embb-1"},
-    "D2": {"failure_type": "broker", "failure_target": "broker-d2"},
+    "D2": {"failure_type": "broker", "failure_target": "broker-d1"},
     "D3": {"failure_type": "network", "failure_target": "federation"},
-    "D4": {"failure_type": "funnel", "failure_target": "worker-d1-urllc-1"},
+    "D4": {"failure_type": "worker", "failure_target": "worker-d1-urllc-1"},
 }
 
 
@@ -111,16 +110,6 @@ def _make_failure_fn(
             project_name=project_name,
             target=run.failure_target,
             delay_s=run.failure_delay_s,
-        )
-    elif run.failure_type == "funnel":
-        return partial(
-            inject_scale_down,
-            project_name=project_name,
-            compose_file=COMPOSE_FILE,
-            env=env,
-            target=run.failure_target,
-            delay_s=run.failure_delay_s,
-            replicas=1,
         )
     else:
         raise ValueError(f"Unknown failure type: {run.failure_type}")

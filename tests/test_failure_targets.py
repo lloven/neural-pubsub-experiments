@@ -295,9 +295,183 @@ class TestProjectNameConsistency:
         from scripts.run_phase_d import RunConfig
         rc = RunConfig(
             config_name="D2", seed=789,
-            failure_type="broker", failure_target="broker-d2",
+            failure_type="broker", failure_target="broker-d1",
         )
         run_id = rc.run_id
         project = f"npubsub-{run_id.lower().replace('_', '-')}"
         assert project == project.lower(), f"Not lowercase: {project}"
         assert "_" not in project, f"Contains underscore: {project}"
+
+
+# ---------------------------------------------------------------------------
+# 7. D2 broker failure must target the critical-path broker
+# ---------------------------------------------------------------------------
+
+class TestD2BrokerOnCriticalPath:
+    """D2 (broker failure) must kill a broker that the workload actually uses.
+
+    The workload submits all pipelines to broker-d1 (via --broker-url).
+    Killing broker-d2 has zero observable effect because it is not on the
+    critical path for pipeline submission. The correct target is broker-d1.
+
+    See L38: every experiment that claims to test an effect must verify the
+    effect actually occurred.
+    """
+
+    def _get_workload_broker(self) -> str:
+        """Parse the workload's --broker-url from docker-compose.local.yaml."""
+        with open(COMPOSE_LOCAL) as f:
+            dc = yaml.safe_load(f) or {}
+        workload_cmd = dc["services"]["workload"]["command"]
+        # Extract broker hostname from --broker-url http://HOSTNAME:PORT
+        import re
+        match = re.search(r"--broker-url\s+http://([^:]+):", workload_cmd)
+        assert match, f"Cannot parse --broker-url from workload command: {workload_cmd}"
+        return match.group(1)
+
+    def test_d2_targets_the_workload_broker(self):
+        """D2 failure target must be the broker that receives workload traffic.
+
+        The workload sends all pipelines to broker-d1. Killing any other
+        broker (e.g. broker-d2) has no observable effect on pipeline
+        completion or latency, making the treatment vacuous (L38).
+        """
+        workload_broker = self._get_workload_broker()
+        d2_target = CONFIGS["D2"]["failure_target"]
+        assert d2_target == workload_broker, (
+            f"D2 targets '{d2_target}' but workload sends to '{workload_broker}'. "
+            f"Killing a broker that is NOT on the critical path produces zero "
+            f"treatment effect. D2 must target '{workload_broker}'."
+        )
+
+    def test_d2_target_is_on_workload_net(self):
+        """The D2 failure target must be on the workload-net network,
+        proving it handles workload traffic."""
+        with open(COMPOSE_LOCAL) as f:
+            dc = yaml.safe_load(f) or {}
+        d2_target = CONFIGS["D2"]["failure_target"]
+        target_networks = dc["services"].get(d2_target, {}).get("networks", [])
+        assert "workload-net" in target_networks, (
+            f"D2 target '{d2_target}' is not on workload-net "
+            f"(networks: {target_networks}). It cannot be on the critical "
+            f"path for pipeline submission."
+        )
+
+    def test_d2_target_receives_all_pipeline_submissions(self):
+        """The D2 target broker must be the one receiving /publish requests.
+
+        In the current topology, the workload POSTs to broker-d1. The D2
+        broker failure target must match this broker so that killing it
+        causes pipeline failures (timeouts, HTTP errors, throughput drop).
+        """
+        workload_broker = self._get_workload_broker()
+        d2_target = CONFIGS["D2"]["failure_target"]
+        # The workload broker is the single entry point for ALL pipelines
+        assert d2_target == workload_broker, (
+            f"D2 kills '{d2_target}' but all /publish requests go to "
+            f"'{workload_broker}'. Treatment has zero effect."
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. D4 funnel failure must use kill, not scale-down (L38)
+# ---------------------------------------------------------------------------
+
+class TestD4FunnelUsesKill:
+    """D4 funnel failure must use inject_compose_kill, not inject_scale_down.
+
+    ROOT CAUSE of D4 having zero observable effect:
+    inject_scale_down runs ``docker compose up -d --scale worker-d1-urllc-1=1``
+    on a service that already has exactly 1 replica (it is a named service,
+    not a scaled service). This is a no-op: the container stays running.
+
+    The fix: D4 must use inject_compose_kill (same as D1/D2) to actually
+    stop the container. The failure overlay (restart: 'no') then prevents
+    Docker from restarting it, causing observable degradation.
+
+    See L37 (each failure type independently validated) and L38 (verify
+    treatment effect).
+    """
+
+    def test_d4_failure_type_uses_kill_path(self):
+        """D4 failure_type must route through inject_compose_kill, not
+        inject_scale_down.
+
+        The _make_failure_fn dispatcher routes 'worker' and 'broker' types
+        to inject_compose_kill, and 'funnel' to inject_scale_down. Since
+        inject_scale_down is a no-op for single-instance services, D4 must
+        use a failure_type that routes to inject_compose_kill.
+        """
+        d4_type = CONFIGS["D4"]["failure_type"]
+        kill_types = {"worker", "broker"}
+        assert d4_type in kill_types, (
+            f"D4 failure_type is '{d4_type}', which routes to "
+            f"inject_scale_down (a no-op for single-instance services). "
+            f"Must be one of {kill_types} to route through inject_compose_kill."
+        )
+
+    def test_d4_does_not_use_scale_down(self):
+        """D4 must NOT use the 'funnel' failure type (inject_scale_down).
+
+        inject_scale_down with replicas=1 on a single-instance service is
+        a complete no-op: it runs
+        ``docker compose up -d --scale <svc>=1 --no-recreate``
+        which changes nothing because the service already has 1 replica.
+        """
+        d4_type = CONFIGS["D4"]["failure_type"]
+        assert d4_type != "funnel", (
+            f"D4 uses failure_type='funnel' which dispatches to "
+            f"inject_scale_down. Scaling a single-instance compose service "
+            f"to 1 replica is a no-op. Use 'worker' type to kill the "
+            f"container via inject_compose_kill instead."
+        )
+
+    def test_d4_targets_urllc_worker(self):
+        """D4 must target a URLLC worker (sensor pipeline handler).
+
+        The funnel failure tests what happens when a sensor-processing
+        worker dies. CQI pipelines require slice_requirement='URLLC', so
+        the target must be a URLLC worker to affect the sensor pipeline.
+        """
+        target = CONFIGS["D4"]["failure_target"]
+        assert "urllc" in target.lower(), (
+            f"D4 failure_target '{target}' is not a URLLC worker. "
+            f"The funnel failure must target a URLLC worker because CQI "
+            f"(sensor) pipelines have slice_requirement='URLLC'. Killing "
+            f"a non-URLLC worker would not affect sensor pipeline processing."
+        )
+
+    def test_d4_target_is_distinct_from_d1(self):
+        """D4 must target a different worker than D1.
+
+        D1 tests generic worker failure (eMBB). D4 tests sensor-worker
+        (URLLC) failure. They must target different workers to be
+        independent failure scenarios (L37).
+        """
+        d1_target = CONFIGS["D1"]["failure_target"]
+        d4_target = CONFIGS["D4"]["failure_target"]
+        assert d1_target != d4_target, (
+            f"D1 and D4 target the same worker '{d1_target}'. "
+            f"D4 must target a URLLC (sensor) worker, while D1 targets "
+            f"an eMBB worker, to test distinct failure modes (L37)."
+        )
+
+    def test_d4_make_failure_fn_returns_kill_partial(self):
+        """_make_failure_fn for D4 must return a partial wrapping
+        inject_compose_kill, not inject_scale_down."""
+        from scripts.run_phase_d import _make_failure_fn, RunConfig
+        rc = RunConfig(
+            config_name="D4", seed=42,
+            failure_type=CONFIGS["D4"]["failure_type"],
+            failure_target=CONFIGS["D4"]["failure_target"],
+        )
+        project_name = f"npubsub-{rc.run_id.lower().replace('_', '-')}"
+        env = {"SEED": "42"}
+        fn = _make_failure_fn(rc, project_name, env)
+        # The partial should wrap inject_compose_kill
+        from scripts._common import inject_compose_kill
+        assert fn.func is inject_compose_kill, (
+            f"D4 _make_failure_fn returns partial of {fn.func.__name__}, "
+            f"expected inject_compose_kill. inject_scale_down is a no-op "
+            f"for single-instance services."
+        )
