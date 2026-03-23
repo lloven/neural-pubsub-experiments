@@ -68,23 +68,12 @@ class TestFailureTargetsMatchCompose:
             f"{sorted(services)}"
         )
 
-    # D2 test removed: D2 (broker-d1 kill) dropped from Phase D (L41).
-
-    def test_d3_network_target_is_real_network(self):
-        """D3 (network failure) target must be an actual compose network."""
-        networks = _load_compose_networks()
-        target = CONFIGS["D3"]["failure_target"]
-        assert target in networks, (
-            f"D3 failure_target '{target}' not found in compose networks: "
-            f"{sorted(networks)}"
-        )
-
-    def test_d4_funnel_target_is_real_service(self):
-        """D4 (funnel failure) target must be an actual compose service."""
+    def test_d2_worker_target_is_real_service(self):
+        """D2 (URLLC worker failure) target must be an actual compose service."""
         services = _load_compose_services()
-        target = CONFIGS["D4"]["failure_target"]
+        target = CONFIGS["D2"]["failure_target"]
         assert target in services, (
-            f"D4 failure_target '{target}' not found in compose services: "
+            f"D2 failure_target '{target}' not found in compose services: "
             f"{sorted(services)}"
         )
 
@@ -287,8 +276,8 @@ class TestProjectNameConsistency:
         """Docker project names must be lowercase with hyphens (no underscores)."""
         from scripts.run_phase_d import RunConfig
         rc = RunConfig(
-            config_name="D3", seed=789,
-            failure_type="network", failure_target="federation",
+            config_name="D2", seed=789,
+            failure_type="worker", failure_target="worker-d1-urllc-1",
         )
         run_id = rc.run_id
         project = f"npubsub-{run_id.lower().replace('_', '-')}"
@@ -306,104 +295,59 @@ class TestProjectNameConsistency:
 
 
 # ---------------------------------------------------------------------------
-# 8. D4 funnel failure must use kill, not scale-down (L38)
+# 8. D2 URLLC worker kill validation (renamed from D4)
 # ---------------------------------------------------------------------------
 
-class TestD4FunnelUsesKill:
-    """D4 funnel failure must use inject_compose_kill, not inject_scale_down.
-
-    ROOT CAUSE of D4 having zero observable effect:
-    inject_scale_down runs ``docker compose up -d --scale worker-d1-urllc-1=1``
-    on a service that already has exactly 1 replica (it is a named service,
-    not a scaled service). This is a no-op: the container stays running.
-
-    The fix: D4 must use inject_compose_kill (same as D1/D2) to actually
-    stop the container. The failure overlay (restart: 'no') then prevents
-    Docker from restarting it, causing observable degradation.
-
-    See L37 (each failure type independently validated) and L38 (verify
-    treatment effect).
+class TestD2UrllcWorkerKill:
+    """D2 (formerly D4) targets the URLLC worker. It must use
+    inject_compose_kill (worker type) and target a different worker than D1.
     """
 
-    def test_d4_failure_type_uses_kill_path(self):
-        """D4 failure_type must route through inject_compose_kill, not
-        inject_scale_down.
-
-        The _make_failure_fn dispatcher routes 'worker' and 'broker' types
-        to inject_compose_kill, and 'funnel' to inject_scale_down. Since
-        inject_scale_down is a no-op for single-instance services, D4 must
-        use a failure_type that routes to inject_compose_kill.
-        """
-        d4_type = CONFIGS["D4"]["failure_type"]
+    def test_d2_failure_type_uses_kill_path(self):
+        """D2 failure_type must route through inject_compose_kill."""
+        d2_type = CONFIGS["D2"]["failure_type"]
         kill_types = {"worker", "broker"}
-        assert d4_type in kill_types, (
-            f"D4 failure_type is '{d4_type}', which routes to "
-            f"inject_scale_down (a no-op for single-instance services). "
-            f"Must be one of {kill_types} to route through inject_compose_kill."
+        assert d2_type in kill_types, (
+            f"D2 failure_type is '{d2_type}', must be one of {kill_types} "
+            f"to route through inject_compose_kill."
         )
 
-    def test_d4_does_not_use_scale_down(self):
-        """D4 must NOT use the 'funnel' failure type (inject_scale_down).
-
-        inject_scale_down with replicas=1 on a single-instance service is
-        a complete no-op: it runs
-        ``docker compose up -d --scale <svc>=1 --no-recreate``
-        which changes nothing because the service already has 1 replica.
-        """
-        d4_type = CONFIGS["D4"]["failure_type"]
-        assert d4_type != "funnel", (
-            f"D4 uses failure_type='funnel' which dispatches to "
-            f"inject_scale_down. Scaling a single-instance compose service "
-            f"to 1 replica is a no-op. Use 'worker' type to kill the "
-            f"container via inject_compose_kill instead."
-        )
-
-    def test_d4_targets_urllc_worker(self):
-        """D4 must target a URLLC worker (sensor pipeline handler).
-
-        The funnel failure tests what happens when a sensor-processing
-        worker dies. CQI pipelines require slice_requirement='URLLC', so
-        the target must be a URLLC worker to affect the sensor pipeline.
-        """
-        target = CONFIGS["D4"]["failure_target"]
+    def test_d2_targets_urllc_worker(self):
+        """D2 must target a URLLC worker (CQI/sensor pipeline handler)."""
+        target = CONFIGS["D2"]["failure_target"]
         assert "urllc" in target.lower(), (
-            f"D4 failure_target '{target}' is not a URLLC worker. "
-            f"The funnel failure must target a URLLC worker because CQI "
-            f"(sensor) pipelines have slice_requirement='URLLC'. Killing "
-            f"a non-URLLC worker would not affect sensor pipeline processing."
+            f"D2 failure_target '{target}' is not a URLLC worker. "
+            f"D2 must target a URLLC worker because CQI (sensor) pipelines "
+            f"have slice_requirement='URLLC'."
         )
 
-    def test_d4_target_is_distinct_from_d1(self):
-        """D4 must target a different worker than D1.
+    def test_d2_target_is_distinct_from_d1(self):
+        """D2 must target a different worker than D1.
 
-        D1 tests generic worker failure (eMBB). D4 tests sensor-worker
-        (URLLC) failure. They must target different workers to be
-        independent failure scenarios (L37).
+        D1 tests eMBB worker failure. D2 tests URLLC worker failure.
+        They must target different workers to test distinct failure modes.
         """
         d1_target = CONFIGS["D1"]["failure_target"]
-        d4_target = CONFIGS["D4"]["failure_target"]
-        assert d1_target != d4_target, (
-            f"D1 and D4 target the same worker '{d1_target}'. "
-            f"D4 must target a URLLC (sensor) worker, while D1 targets "
-            f"an eMBB worker, to test distinct failure modes (L37)."
+        d2_target = CONFIGS["D2"]["failure_target"]
+        assert d1_target != d2_target, (
+            f"D1 and D2 target the same worker '{d1_target}'. "
+            f"D2 must target a URLLC worker, while D1 targets an eMBB worker."
         )
 
-    def test_d4_make_failure_fn_returns_kill_partial(self):
-        """_make_failure_fn for D4 must return a partial wrapping
-        inject_compose_kill, not inject_scale_down."""
+    def test_d2_make_failure_fn_returns_kill_partial(self):
+        """_make_failure_fn for D2 must return a partial wrapping
+        inject_compose_kill."""
         from scripts.run_phase_d import _make_failure_fn, RunConfig
         rc = RunConfig(
-            config_name="D4", seed=42,
-            failure_type=CONFIGS["D4"]["failure_type"],
-            failure_target=CONFIGS["D4"]["failure_target"],
+            config_name="D2", seed=42,
+            failure_type=CONFIGS["D2"]["failure_type"],
+            failure_target=CONFIGS["D2"]["failure_target"],
         )
         project_name = f"npubsub-{rc.run_id.lower().replace('_', '-')}"
         env = {"SEED": "42"}
         fn = _make_failure_fn(rc, project_name, env)
-        # The partial should wrap inject_compose_kill
         from scripts._common import inject_compose_kill
         assert fn.func is inject_compose_kill, (
-            f"D4 _make_failure_fn returns partial of {fn.func.__name__}, "
-            f"expected inject_compose_kill. inject_scale_down is a no-op "
-            f"for single-instance services."
+            f"D2 _make_failure_fn returns partial of {fn.func.__name__}, "
+            f"expected inject_compose_kill."
         )
