@@ -129,7 +129,8 @@ def _make_failure_fn(
 def _run(run: RunConfig, dry_run: bool) -> dict:
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
-    project_name = f"npubsub-{run_id}"
+    # Must match run_single's normalization: lowercase + replace _ with -
+    project_name = f"npubsub-{run_id.lower().replace('_', '-')}"
 
     logger.info(
         "Run: %s (failure=%s, target=%s, seed=%d, "

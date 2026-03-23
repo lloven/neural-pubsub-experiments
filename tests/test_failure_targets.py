@@ -262,3 +262,42 @@ class TestPhaseDDetachedMode:
         assert "detached" in source and "True" in source, (
             "Phase D _run() must pass detached=True to run_single()"
         )
+
+
+# ---------------------------------------------------------------------------
+# 6. Project name must match between _run and run_single
+# ---------------------------------------------------------------------------
+
+class TestProjectNameConsistency:
+    """The project name used by _make_failure_fn must match run_single's."""
+
+    def test_phase_d_project_name_matches_run_single(self):
+        """_run() must normalize project_name the same way run_single does."""
+        from scripts.run_phase_d import RunConfig
+        rc = RunConfig(
+            config_name="D1", seed=42,
+            failure_type="worker", failure_target="worker-d1-embb-1",
+        )
+        # What _run produces
+        run_id = rc.run_id  # "D1_failure-worker_seed-42"
+        phase_d_project = f"npubsub-{run_id.lower().replace('_', '-')}"
+
+        # What run_single produces
+        run_single_project = f"npubsub-{run_id.lower().replace('_', '-')}"
+
+        assert phase_d_project == run_single_project, (
+            f"Project name mismatch: _run={phase_d_project}, "
+            f"run_single={run_single_project}"
+        )
+
+    def test_project_name_is_lowercase_with_hyphens(self):
+        """Docker project names must be lowercase with hyphens (no underscores)."""
+        from scripts.run_phase_d import RunConfig
+        rc = RunConfig(
+            config_name="D2", seed=789,
+            failure_type="broker", failure_target="broker-d2",
+        )
+        run_id = rc.run_id
+        project = f"npubsub-{run_id.lower().replace('_', '-')}"
+        assert project == project.lower(), f"Not lowercase: {project}"
+        assert "_" not in project, f"Contains underscore: {project}"
