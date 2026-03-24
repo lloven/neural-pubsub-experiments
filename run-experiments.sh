@@ -20,6 +20,7 @@
 #   phase-b [--resume]   Phase B: slice-aware placement (20 runs)
 #   phase-c [--resume]   Phase C: cross-site federation (needs HOST_D2)
 #   phase-d [--resume]   Phase D: failure resilience (20 runs)
+#   phase-e [--resume]   Phase E: combined H3+H6 contention + failure (40 runs)
 #   single CONFIG RATE STAGES SEED   Single run with explicit parameters
 #   stop                 Stop all containers
 #   status               Show progress for all phases
@@ -272,6 +273,17 @@ phase-d)
     rcmd "$PY_CMD"
     ;;
 
+# --- Phase E -----------------------------------------------------------------
+phase-e)
+    auto_sync
+    PHASE_SESSION="npubsub-phase-e"
+    PY_CMD="python3 -m scripts.run_phase_e $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_warmup) $(py_measurement)"
+    if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
+        exit 0
+    fi
+    rcmd "$PY_CMD"
+    ;;
+
 # --- Single run --------------------------------------------------------------
 single)
     CONFIG="${1:?Usage: $0 single CONFIG RATE STAGES SEED}"
@@ -300,7 +312,7 @@ status)
     if [[ -n "$REMOTE_MODE" ]]; then
         remote_flag="--remote $TARGET_HOST"
     fi
-    for phase in phase_a phase_b phase_c phase_d; do
+    for phase in phase_a phase_b phase_c phase_d phase_e; do
         python3 -m scripts.monitor --once $remote_flag "results/$phase" 2>/dev/null || true
     done
     ;;
@@ -331,6 +343,7 @@ Commands:
   phase-b [--resume]   Phase B: slice-aware placement (20 runs)
   phase-c [--resume]   Phase C: cross-site federation (needs HOST_D2)
   phase-d [--resume]   Phase D: failure resilience (20 runs)
+  phase-e [--resume]   Phase E: combined H3+H6 contention + failure (40 runs)
   single CONFIG RATE STAGES SEED   Single run
   stop                 Stop all containers
   status               Show progress for all phases

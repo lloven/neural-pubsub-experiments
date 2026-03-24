@@ -373,3 +373,25 @@ class TestDispatcherNewFlags:
         combined = result.stdout + result.stderr
         # warmup=30 + measurement=120 = 150s
         assert "duration=150s" in combined
+
+
+class TestDispatcherPhaseE:
+    """The dispatcher must forward --configs and --dry-run to Phase E."""
+
+    def test_phase_e_dry_run(self):
+        """phase-e --dry-run should not start Docker."""
+        result = run_root_script("phase-e", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "DRY RUN" in output.upper(), (
+            f"--dry-run must be forwarded to Phase E Python.\nOutput:\n{output[-2000:]}"
+        )
+
+    def test_phase_e_configs_forwarded(self):
+        """--configs E7 should plan only E7 runs (5 seeds = 5 runs)."""
+        result = run_root_script("phase-e", "--configs", "E7", "--dry-run")
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"Script failed:\n{output}"
+        assert "5 runs planned" in output, (
+            f"--configs E7 should produce 5 runs.\nOutput:\n{output[-2000:]}"
+        )

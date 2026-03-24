@@ -214,7 +214,42 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 - Funnel mode comparison: completion rate, latency, and data completeness across wait/proceed/abort modes
 - Strategy comparison (S1/S2/S3) for D1-D2: recovery behaviour under different placement strategies
 
-### Phase E: Scaling study (simulation)
+### Phase E: Combined H3+H6 contention + failure
+
+**Purpose:** Phase D showed that at medium load (5 pps), all placement strategies recover equally from worker failure because the broker's health check handles rerouting. At HIGH load (20 pps, 2x capacity), S3's load-aware re-placement should outperform S1's blind round-robin because surviving workers are near saturation. Phase E combines A.6 contention rates with D failure injection and strategy comparison. Tests H3+H6. Answers RQ1+RQ3.
+
+**Transport:** HTTP only (orthogonality proven in Phase B).
+
+**Rationale:** Medium-load D results motivated this experiment. The key insight is that intelligent placement only matters when resources are scarce: at capacity, any strategy works; at overload + failure, load-aware re-placement should significantly outperform blind round-robin.
+
+| Config | Rate | Strategy | Failure | Tests |
+|--------|------|----------|---------|-------|
+| E1 | 10 pps | S1 (round-robin) | none | H3 baseline |
+| E2 | 10 pps | S3 (neural) | none | H3 baseline |
+| E3 | 10 pps | S1 | eMBB worker kill @300s | H6 medium-load |
+| E4 | 10 pps | S3 | eMBB worker kill @300s | H6 medium-load |
+| E5 | 20 pps | S1 | none | H3 overload |
+| E6 | 20 pps | S3 | none | H3 overload |
+| E7 | 20 pps | S1 | eMBB worker kill @300s | **H3+H6 key cell** |
+| E8 | 20 pps | S3 | eMBB worker kill @300s | **H3+H6 key cell** |
+
+**Matrix:** 8 configs x 5 seeds = 40 runs x 12 min = ~8 hours.
+
+**Failure target:** `worker-d1-embb-1` (on critical path for anomaly-detection pipelines). Uses `docker-compose.failure.yaml` overlay to disable container restart.
+
+**Expected results:**
+- E1 ~ E2: at capacity, strategy difference is negligible (confirmed by Phase D)
+- E3 ~ E4: at capacity + failure, health check handles rerouting equally (confirmed by D1-S1 smoke)
+- E5 vs E6: at overload, S3 should show lower tail latency (H3 prediction)
+- **E7 vs E8: at overload + failure, S3 should significantly outperform S1** (H3+H6 combined prediction)
+
+**Expected outputs:**
+- Latency comparison (p50, p95, p99) across all 8 configs
+- Throughput degradation under overload and failure
+- Recovery timeline for E3/E4/E7/E8: detection_time, recovery_time, degradation_depth
+- Strategy effect size: S3 advantage over S1 at 10 pps vs 20 pps, with and without failure
+
+### Phase F: Scaling study (simulation)
 
 **Purpose:** Validate that the federation architecture scales beyond the 2-domain testbed. Tests H5. Pure simulation using EISim.
 
@@ -228,7 +263,7 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 - Throughput scaling: total system throughput vs. number of nodes
 - Comparison: flat federation vs. hierarchical federation
 
-**Note:** Phase E is a stretch goal. Paper claims 1-6 (H1-H4, H6) are covered by Phases A-D on the real testbed.
+**Note:** Phase F is a stretch goal. Paper claims 1-6 (H1-H4, H6) are covered by Phases A-E on the real testbed.
 
 ## 5. Baselines
 
