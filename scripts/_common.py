@@ -28,7 +28,9 @@ import csv
 import json
 import logging
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -59,6 +61,35 @@ RATE_MAP: dict[str, float] = {
     "medium": 5.0,
     "high": 10.0,
 }
+
+# ---------------------------------------------------------------------------
+# Signal-safe cleanup state
+# ---------------------------------------------------------------------------
+
+# Tracks the currently running project so that signal handlers can clean up.
+# Set by run_single before compose_up, cleared after compose_down.
+_current_project: dict | None = None
+
+
+def _cleanup_current_project(signum: int, frame: Any) -> None:
+    """Signal handler that tears down the current Docker Compose project.
+
+    Registered for SIGTERM and SIGINT in :func:`phase_main` so that
+    interrupted experiments do not leave orphaned containers.
+    """
+    proj = _current_project
+    if proj is not None:
+        logger.warning(
+            "Signal %d received — cleaning up project %s",
+            signum, proj["project_name"],
+        )
+        compose_down(
+            proj["project_name"],
+            proj["compose_file"],
+            proj["env"],
+            compose_files=proj["compose_files"],
+        )
+    sys.exit(128 + signum)
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +273,7 @@ def compose_up(
         "docker", "compose", *file_args,
         "-p", project_name,
         "up", "--build", "--abort-on-container-exit",
-        "--timeout", "30",
+        "--remove-orphans", "--timeout", "30",
     ]
 
     if failure_fn is None:
@@ -563,6 +594,19 @@ def run_single(
         container_result = result_file
     env["RESULT_FILE"] = str(container_result)
 
+    # Pre-run cleanup: remove stale containers from a previous interrupted run.
+    # Idempotent — compose_down with check=False handles "nothing to stop".
+    compose_down(project_name, COMPOSE_FILE, env, compose_files=compose_files)
+
+    # Track the current project for signal-handler cleanup.
+    global _current_project
+    _current_project = {
+        "project_name": project_name,
+        "compose_file": COMPOSE_FILE,
+        "env": env,
+        "compose_files": compose_files,
+    }
+
     try:
         if detached:
             compose_up_detached(
@@ -584,6 +628,7 @@ def run_single(
             )
     finally:
         compose_down(project_name, COMPOSE_FILE, env, compose_files=compose_files)
+        _current_project = None
         # Fix file ownership: Docker writes as root; make results readable
         # by the host user so the monitor and rsync can access them.
         _fix_result_permissions(results_dir)
@@ -709,6 +754,10 @@ def phase_main(
 
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level))
+
+    # Register signal handlers for graceful cleanup on interruption.
+    signal.signal(signal.SIGTERM, _cleanup_current_project)
+    signal.signal(signal.SIGINT, _cleanup_current_project)
 
     config_names = [c.strip() for c in args.configs.split(",")]
     seeds = [int(s.strip()) for s in args.seeds.split(",")]
