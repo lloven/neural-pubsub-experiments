@@ -160,23 +160,32 @@ RESUME=""
 DRY_RUN=""
 CONFIGS_ARG=""
 SEEDS_ARG=""
+STRATEGY_ARG=""
+WARMUP_ARG=""
+MEASUREMENT_ARG=""
 remaining_args=()
-# Parse two-token flags (--configs VALUE, --seeds VALUE)
+# Parse two-token flags (--configs VALUE, --seeds VALUE, etc.)
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --resume)  RESUME=1; shift ;;
-        --dry-run) DRY_RUN=1; shift ;;
-        --configs) CONFIGS_ARG="$2"; shift 2 ;;
-        --seeds)   SEEDS_ARG="$2"; shift 2 ;;
-        *)         remaining_args+=("$1"); shift ;;
+        --resume)      RESUME=1; shift ;;
+        --dry-run)     DRY_RUN=1; shift ;;
+        --configs)     CONFIGS_ARG="$2"; shift 2 ;;
+        --seeds)       SEEDS_ARG="$2"; shift 2 ;;
+        --strategy)    STRATEGY_ARG="$2"; shift 2 ;;
+        --warmup)      WARMUP_ARG="$2"; shift 2 ;;
+        --measurement) MEASUREMENT_ARG="$2"; shift 2 ;;
+        *)             remaining_args+=("$1"); shift ;;
     esac
 done
 
 # Helper: build Python flags
-py_resume()  { [[ -n "$RESUME" ]]      && echo "--resume"  || true; }
-py_dry_run() { [[ -n "$DRY_RUN" ]]     && echo "--dry-run" || true; }
-py_configs() { [[ -n "$CONFIGS_ARG" ]]  && echo "--configs $CONFIGS_ARG" || true; }
-py_seeds()   { [[ -n "$SEEDS_ARG" ]]   && echo "--seeds $SEEDS_ARG"   || true; }
+py_resume()      { [[ -n "$RESUME" ]]          && echo "--resume"                  || true; }
+py_dry_run()     { [[ -n "$DRY_RUN" ]]         && echo "--dry-run"                 || true; }
+py_configs()     { [[ -n "$CONFIGS_ARG" ]]      && echo "--configs $CONFIGS_ARG"    || true; }
+py_seeds()       { [[ -n "$SEEDS_ARG" ]]        && echo "--seeds $SEEDS_ARG"        || true; }
+py_strategy()    { [[ -n "$STRATEGY_ARG" ]]     && echo "--strategy $STRATEGY_ARG"  || true; }
+py_warmup()      { [[ -n "$WARMUP_ARG" ]]       && echo "--warmup $WARMUP_ARG"      || true; }
+py_measurement() { [[ -n "$MEASUREMENT_ARG" ]]  && echo "--measurement $MEASUREMENT_ARG" || true; }
 
 # =============================================================================
 # Command dispatch -- delegates all experiment logic to Python
@@ -256,7 +265,7 @@ phase-c)
 phase-d)
     auto_sync
     PHASE_SESSION="npubsub-phase-d"
-    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
+    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_strategy) $(py_warmup) $(py_measurement)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
