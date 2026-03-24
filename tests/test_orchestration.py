@@ -207,14 +207,14 @@ class TestPhaseBOverlays:
         kwargs = self._get_run_kwargs("B4")
         assert kwargs.get("failure_fn") is not None, "B4 must have failure injection"
 
-    def test_phase_b_matrix_is_50_runs(self):
-        """Test 14: 5 configs (B1,B1eq,B2,B3,B4) × 2 transports × 5 seeds = 50 runs."""
+    def test_phase_b_matrix_is_60_runs(self):
+        """Test 14: 6 configs (B1,B1eq,B2,B2flat,B3,B4) × 2 transports × 5 seeds = 60 runs."""
         from scripts.run_phase_b import build_run_matrix, CONFIGS
         runs = build_run_matrix(
             list(CONFIGS.keys()),
             [42, 123, 456, 789, 0],
         )
-        assert len(runs) == 50
+        assert len(runs) == 60
 
 
 # ============================================================================

@@ -31,7 +31,17 @@ from src.pipeline.patterns import funnel_pipeline, map_pipeline
 # Constants
 # ---------------------------------------------------------------------------
 
-SCENARIO_NAMES = ["homogeneous", "heterogeneous", "funnel", "slice_constrained", "cross_domain"]
+TREE_SCENARIO_NAMES = ["homogeneous", "heterogeneous", "funnel", "slice_constrained", "cross_domain"]
+
+NON_TREE_SCENARIO_NAMES = [
+    "diamond",
+    "lattice_2x3",
+    "fork_join",
+    "shared_resource",
+    "series_parallel",
+]
+
+SCENARIO_NAMES = TREE_SCENARIO_NAMES + NON_TREE_SCENARIO_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +244,153 @@ def _build_scenario(name: str):
         dag.add_edge(Edge("s1", "s2", latency_bound=20.0))
         return dag, topo, gov, "cross_domain_3x4", "linear_governed"
 
+    # ------------------------------------------------------------------
+    # Non-tree DAG scenarios (greedy heuristic path)
+    # ------------------------------------------------------------------
+
+    if name == "diamond":
+        # Diamond: A→B, A→C, B→D, C→D (shared sink, fan-out at A).
+        # Adversarial latency: n0 has highest capacity (greedy picks it for A),
+        # but n0 is distant from the cluster {n1,n2,n3}. Optimal places A in
+        # the cluster despite slightly higher load cost. Demonstrates greedy's
+        # myopia: it doesn't account for successor latency when placing A.
+        nodes = [
+            ExecutionUnit("n0", "d1", "eMBB", capacity=1.0),   # isolated
+            ExecutionUnit("n1", "d1", "eMBB", capacity=0.9),   # cluster
+            ExecutionUnit("n2", "d1", "eMBB", capacity=0.9),   # cluster
+            ExecutionUnit("n3", "d1", "eMBB", capacity=0.9),   # cluster
+        ]
+        lats = {
+            ("n0", "n1"): 4.0, ("n0", "n2"): 4.0, ("n0", "n3"): 4.0,
+            ("n1", "n2"): 1.0, ("n1", "n3"): 1.0, ("n2", "n3"): 1.0,
+        }
+        topo = NetworkTopology(nodes=nodes, latency_matrix=lats)
+        dag = PipelineDAG()
+        dag.add_stage(Stage("A", "source", 0.4, 5.0))
+        dag.add_stage(Stage("B", "process", 0.4, 5.0))
+        dag.add_stage(Stage("C", "process", 0.4, 5.0))
+        dag.add_stage(Stage("D", "sink", 0.4, 5.0))
+        dag.add_edge(Edge("A", "B", latency_bound=20.0))
+        dag.add_edge(Edge("A", "C", latency_bound=20.0))
+        dag.add_edge(Edge("B", "D", latency_bound=20.0))
+        dag.add_edge(Edge("C", "D", latency_bound=20.0))
+        return dag, topo, GovernancePolicy(), "diamond_4x4", "diamond"
+
+    if name == "lattice_2x3":
+        # 2x3 lattice: two rows of 3, with forward and cross edges
+        #   r0c0 → r0c1 → r0c2
+        #     ↓  ↘  ↓  ↘  ↓
+        #   r1c0 → r1c1 → r1c2
+        nodes = [_node(f"n{i}", capacity=1.5) for i in range(5)]
+        nids = [n.node_id for n in nodes]
+        topo = NetworkTopology(
+            nodes=nodes,
+            latency_matrix=_full_latency_matrix(nids, 2.0),
+        )
+        dag = PipelineDAG()
+        for r in range(2):
+            for c in range(3):
+                sid = f"r{r}c{c}"
+                dag.add_stage(Stage(sid, "compute", 0.2, 3.0))
+        # Row edges
+        for r in range(2):
+            for c in range(2):
+                dag.add_edge(Edge(f"r{r}c{c}", f"r{r}c{c+1}", latency_bound=10.0))
+        # Column edges
+        for c in range(3):
+            dag.add_edge(Edge(f"r0c{c}", f"r1c{c}", latency_bound=10.0))
+        # Cross edges (diagonal)
+        for c in range(2):
+            dag.add_edge(Edge(f"r0c{c}", f"r1c{c+1}", latency_bound=10.0))
+        return dag, topo, GovernancePolicy(), "lattice_2x3_6x5", "lattice"
+
+    if name == "fork_join":
+        # Fork-join: source fans out to 3 parallel paths, all join at sink
+        #   S → P0 → Q0 ↘
+        #   S → P1 → Q1 → J
+        #   S → P2 → Q2 ↗
+        nodes = [_node(f"n{i}", capacity=2.0) for i in range(4)]
+        nids = [n.node_id for n in nodes]
+        topo = NetworkTopology(
+            nodes=nodes,
+            latency_matrix=_full_latency_matrix(nids, 2.0, {
+                ("n0", "n1"): 1.0,
+                ("n1", "n2"): 1.0,
+            }),
+        )
+        dag = PipelineDAG()
+        dag.add_stage(Stage("S", "source", 0.2, 5.0))
+        for i in range(3):
+            dag.add_stage(Stage(f"P{i}", "process", 0.3, 3.0))
+            dag.add_stage(Stage(f"Q{i}", "transform", 0.2, 3.0))
+        dag.add_stage(Stage("J", "join", 0.3, 5.0))
+        for i in range(3):
+            dag.add_edge(Edge("S", f"P{i}", latency_bound=10.0))
+            dag.add_edge(Edge(f"P{i}", f"Q{i}", latency_bound=10.0))
+            dag.add_edge(Edge(f"Q{i}", "J", latency_bound=10.0))
+        return dag, topo, GovernancePolicy(), "fork_join_8x4", "fork_join"
+
+    if name == "shared_resource":
+        # Two pipelines sharing a common middle stage
+        #   A0 → M → B0
+        #   A1 ↗   ↘ B1
+        # Congested: high demand relative to capacity (>50% utilisation)
+        nodes = [
+            ExecutionUnit("n0", "d1", "eMBB", capacity=0.7),
+            ExecutionUnit("n1", "d1", "eMBB", capacity=0.7),
+            ExecutionUnit("n2", "d1", "eMBB", capacity=0.7),
+            ExecutionUnit("n3", "d1", "eMBB", capacity=0.7),
+        ]
+        nids = [n.node_id for n in nodes]
+        topo = NetworkTopology(
+            nodes=nodes,
+            latency_matrix=_full_latency_matrix(nids, 2.0),
+        )
+        dag = PipelineDAG()
+        dag.add_stage(Stage("A0", "ingest", 0.3, 5.0))
+        dag.add_stage(Stage("A1", "ingest", 0.3, 5.0))
+        dag.add_stage(Stage("M", "process", 0.5, 5.0))  # shared, heavy
+        dag.add_stage(Stage("B0", "output", 0.2, 3.0))
+        dag.add_stage(Stage("B1", "output", 0.2, 3.0))
+        dag.add_edge(Edge("A0", "M", latency_bound=10.0))
+        dag.add_edge(Edge("A1", "M", latency_bound=10.0))
+        dag.add_edge(Edge("M", "B0", latency_bound=10.0))
+        dag.add_edge(Edge("M", "B1", latency_bound=10.0))
+        return dag, topo, GovernancePolicy(), "shared_resource_5x4", "shared"
+
+    if name == "series_parallel":
+        # Series-parallel graph: two parallel chains connected in series
+        #   S → A0 → A1 ↘
+        #                 M → C0 → T
+        #   S → B0 → B1 ↗
+        nodes = [_node(f"n{i}", capacity=1.5) for i in range(4)]
+        nids = [n.node_id for n in nodes]
+        topo = NetworkTopology(
+            nodes=nodes,
+            latency_matrix=_full_latency_matrix(nids, 2.0, {
+                ("n0", "n1"): 1.0,
+                ("n2", "n3"): 1.0,
+            }),
+        )
+        dag = PipelineDAG()
+        dag.add_stage(Stage("S", "source", 0.2, 5.0))
+        dag.add_stage(Stage("A0", "process", 0.3, 3.0))
+        dag.add_stage(Stage("A1", "process", 0.3, 3.0))
+        dag.add_stage(Stage("B0", "process", 0.3, 3.0))
+        dag.add_stage(Stage("B1", "process", 0.3, 3.0))
+        dag.add_stage(Stage("M", "merge", 0.3, 5.0))
+        dag.add_stage(Stage("C0", "compute", 0.2, 3.0))
+        dag.add_stage(Stage("T", "sink", 0.2, 3.0))
+        dag.add_edge(Edge("S", "A0", latency_bound=10.0))
+        dag.add_edge(Edge("S", "B0", latency_bound=10.0))
+        dag.add_edge(Edge("A0", "A1", latency_bound=10.0))
+        dag.add_edge(Edge("B0", "B1", latency_bound=10.0))
+        dag.add_edge(Edge("A1", "M", latency_bound=10.0))
+        dag.add_edge(Edge("B1", "M", latency_bound=10.0))
+        dag.add_edge(Edge("M", "C0", latency_bound=10.0))
+        dag.add_edge(Edge("C0", "T", latency_bound=10.0))
+        return dag, topo, GovernancePolicy(), "series_parallel_8x4", "series_parallel"
+
     raise ValueError(f"Unknown scenario: {name}")
 
 
@@ -245,11 +402,17 @@ def _build_scenario(name: str):
 @pytest.mark.benchmark
 @pytest.mark.parametrize("scenario", _SCENARIOS)
 def test_placement_quality_parametrized(scenario):
-    """Parametrized quality check: algorithm cost within 10% of brute-force optimal."""
+    """Parametrized quality check: tree scenarios within 10% of optimal, non-tree within 200%."""
     dag, topo, gov, label, ptype = _build_scenario(scenario)
     result = _evaluate(label, ptype, dag, topo, gov)
 
-    _assert_quality(result)
+    # Tree DAGs use DP (provably optimal) so the gap must be ~0.
+    # Non-tree DAGs use the greedy heuristic which can have a significant gap,
+    # especially on adversarial topologies (e.g. diamond with isolated node).
+    if scenario in TREE_SCENARIO_NAMES:
+        _assert_quality(result, max_gap=0.10)
+    else:
+        _assert_quality(result, max_gap=2.0)
 
     # Constraint-specific assertions per scenario
     if scenario == "slice_constrained":
@@ -267,3 +430,85 @@ def test_placement_quality_parametrized(scenario):
         assert s0_node.domain_id == "domain1", (
             f"Stage s0 must stay in domain1 but placed in {s0_node.domain_id}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Non-tree DAG structural verification
+# ---------------------------------------------------------------------------
+
+
+_NON_TREE_SCENARIOS = [
+    pytest.param(name, id=name) for name in NON_TREE_SCENARIO_NAMES
+]
+
+_TREE_SCENARIOS = [
+    pytest.param(name, id=name) for name in TREE_SCENARIO_NAMES
+]
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("scenario", _NON_TREE_SCENARIOS)
+def test_non_tree_dag_is_not_tree(scenario):
+    """Non-tree scenarios must produce DAGs where is_tree() is False (greedy path)."""
+    dag, _topo, _gov, _label, _ptype = _build_scenario(scenario)
+    assert dag.is_tree() is False, (
+        f"Scenario {scenario!r} should produce a non-tree DAG but is_tree() returned True"
+    )
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("scenario", _NON_TREE_SCENARIOS)
+def test_non_tree_brute_force_finds_feasible_placement(scenario):
+    """Brute-force must find at least one feasible placement for each non-tree scenario."""
+    dag, topo, gov, _label, _ptype = _build_scenario(scenario)
+    opt_cost, opt_placement = _brute_force_optimal(dag, topo, gov)
+    assert opt_cost < float("inf"), (
+        f"Scenario {scenario!r}: no feasible placement found by brute-force"
+    )
+    assert len(opt_placement) == len(dag), (
+        f"Scenario {scenario!r}: optimal placement has {len(opt_placement)} stages, "
+        f"expected {len(dag)}"
+    )
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("scenario", _NON_TREE_SCENARIOS)
+def test_non_tree_gap_ratio_computed(scenario):
+    """Gap ratio is computed for non-tree scenarios (may be > 0, that's expected)."""
+    dag, topo, gov, label, ptype = _build_scenario(scenario)
+    result = _evaluate(label, ptype, dag, topo, gov)
+    assert result.constraint_violations == 0, (
+        f"Scenario {scenario!r}: {result.constraint_violations} constraint violation(s)"
+    )
+    assert result.gap_ratio >= 0.0, (
+        f"Scenario {scenario!r}: negative gap_ratio {result.gap_ratio:.4f}"
+    )
+    # Non-tree scenarios: greedy is a heuristic, gap can be significant on
+    # adversarial topologies. We bound it loosely here; the actual gap values
+    # are the interesting experimental output reported in the CSV.
+    _assert_quality(result, max_gap=2.0)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("scenario", _TREE_SCENARIOS)
+def test_tree_scenarios_have_zero_gap(scenario):
+    """Regression: tree scenarios must have gap_ratio = 0 (DP is provably optimal)."""
+    dag, topo, gov, label, ptype = _build_scenario(scenario)
+    result = _evaluate(label, ptype, dag, topo, gov)
+    assert result.gap_ratio < 1e-9, (
+        f"Tree scenario {scenario!r}: gap_ratio {result.gap_ratio:.6f} is not zero "
+        f"(algo={result.algorithm_cost:.6f}, opt={result.optimal_cost:.6f})"
+    )
+
+
+@pytest.mark.benchmark
+def test_shared_resource_is_congested():
+    """Shared-resource scenario has demand > 50% of total capacity (congestion test)."""
+    dag, topo, _gov, _label, _ptype = _build_scenario("shared_resource")
+    total_demand = sum(dag.get_stage(sid).computational_demand for sid in dag.stages)
+    total_capacity = sum(n.capacity for n in topo.nodes)
+    utilisation = total_demand / total_capacity
+    assert utilisation > 0.5, (
+        f"Shared-resource scenario should be congested (>50% utilisation) "
+        f"but utilisation is {utilisation:.1%}"
+    )

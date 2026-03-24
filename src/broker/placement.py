@@ -148,6 +148,32 @@ class GovernancePolicy:
 
 
 # --------------------------------------------------------------------------
+# Slice matching
+# --------------------------------------------------------------------------
+
+
+def slice_matches(worker_slice: str, required_slice: str | None) -> bool:
+    """Check whether a worker's slice satisfies a stage's slice requirement.
+
+    In flat-topology configurations (B1/B1eq), all workers register with
+    ``slice_id="flat"``.  A flat worker accepts any slice requirement,
+    modelling the absence of network slicing.
+
+    Args:
+        worker_slice: The slice_id of the execution unit.
+        required_slice: The stage's slice_requirement (None means no constraint).
+
+    Returns:
+        True if the worker can host a stage with the given slice requirement.
+    """
+    if required_slice is None:
+        return True
+    if worker_slice == "flat":
+        return True  # flat workers accept any slice
+    return worker_slice == required_slice
+
+
+# --------------------------------------------------------------------------
 # Feasibility checking
 # --------------------------------------------------------------------------
 
@@ -257,17 +283,16 @@ def check_feasibility(
                 f"is local-only but placed outside its domain."
             )
 
-    # 4. Slice (Eq. 9)
+    # 4. Slice (Eq. 9) -- flat workers accept any slice (wildcard matching)
     for stage_id, node_id in placement.items():
         stage = stages[stage_id]
         node = topology.get_node(node_id)
-        if stage.slice_requirement is not None:
-            if node.slice_id != stage.slice_requirement:
-                violations.append(
-                    f"Slice: stage '{stage_id}' requires slice "
-                    f"'{stage.slice_requirement}' but node '{node_id}' "
-                    f"provides '{node.slice_id}'."
-                )
+        if not slice_matches(node.slice_id, stage.slice_requirement):
+            violations.append(
+                f"Slice: stage '{stage_id}' requires slice "
+                f"'{stage.slice_requirement}' but node '{node_id}' "
+                f"provides '{node.slice_id}'."
+            )
 
     return (len(violations) == 0, violations)
 
@@ -721,8 +746,8 @@ def _is_node_feasible_simple(
     if stage.computational_demand > node.residual_capacity + 1e-9:
         return False
 
-    # Slice (Eq. 9)
-    if stage.slice_requirement is not None and node.slice_id != stage.slice_requirement:
+    # Slice (Eq. 9) -- flat workers accept any slice (wildcard matching)
+    if not slice_matches(node.slice_id, stage.slice_requirement):
         return False
 
     # Governance: data sovereignty (Eq. 5)

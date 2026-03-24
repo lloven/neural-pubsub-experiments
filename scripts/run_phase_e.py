@@ -93,6 +93,7 @@ def build_run_matrix(
     seeds: list[int],
     warmup_s: int | None = None,
     measurement_s: int | None = None,
+    failure_delay_s: int | None = None,
 ) -> list[PhaseERunConfig]:
     """Build the Phase E run matrix.
 
@@ -101,6 +102,7 @@ def build_run_matrix(
         seeds: List of random seeds.
         warmup_s: Override warmup duration.
         measurement_s: Override measurement duration.
+        failure_delay_s: Override failure injection delay.
 
     Returns:
         List of PhaseERunConfig, one per config x seed combination.
@@ -110,6 +112,8 @@ def build_run_matrix(
         overrides["warmup_s"] = warmup_s
     if measurement_s is not None:
         overrides["measurement_s"] = measurement_s
+    if failure_delay_s is not None:
+        overrides["failure_delay_s"] = failure_delay_s
 
     runs = []
     for config_name in configs:
@@ -191,6 +195,8 @@ def _extra_args(parser):
                         help="Override warmup_s (default: 120)")
     parser.add_argument("--measurement", type=int, default=None,
                         help="Override measurement_s (default: 600)")
+    parser.add_argument("--failure-delay", type=int, default=None,
+                        help="Override failure_delay_s (default: 300)")
 
 
 def _parse_extra(args):
@@ -198,6 +204,7 @@ def _parse_extra(args):
     return dict(
         warmup_s=args.warmup,
         measurement_s=args.measurement,
+        failure_delay_s=args.failure_delay,
     )
 
 

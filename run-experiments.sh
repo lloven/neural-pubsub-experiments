@@ -164,6 +164,7 @@ SEEDS_ARG=""
 STRATEGY_ARG=""
 WARMUP_ARG=""
 MEASUREMENT_ARG=""
+FAILURE_DELAY_ARG=""
 remaining_args=()
 # Parse two-token flags (--configs VALUE, --seeds VALUE, etc.)
 while [[ $# -gt 0 ]]; do
@@ -174,8 +175,9 @@ while [[ $# -gt 0 ]]; do
         --seeds)       SEEDS_ARG="$2"; shift 2 ;;
         --strategy)    STRATEGY_ARG="$2"; shift 2 ;;
         --warmup)      WARMUP_ARG="$2"; shift 2 ;;
-        --measurement) MEASUREMENT_ARG="$2"; shift 2 ;;
-        *)             remaining_args+=("$1"); shift ;;
+        --measurement)    MEASUREMENT_ARG="$2"; shift 2 ;;
+        --failure-delay) FAILURE_DELAY_ARG="$2"; shift 2 ;;
+        *)               remaining_args+=("$1"); shift ;;
     esac
 done
 
@@ -186,7 +188,8 @@ py_configs()     { [[ -n "$CONFIGS_ARG" ]]      && echo "--configs $CONFIGS_ARG"
 py_seeds()       { [[ -n "$SEEDS_ARG" ]]        && echo "--seeds $SEEDS_ARG"        || true; }
 py_strategy()    { [[ -n "$STRATEGY_ARG" ]]     && echo "--strategy $STRATEGY_ARG"  || true; }
 py_warmup()      { [[ -n "$WARMUP_ARG" ]]       && echo "--warmup $WARMUP_ARG"      || true; }
-py_measurement() { [[ -n "$MEASUREMENT_ARG" ]]  && echo "--measurement $MEASUREMENT_ARG" || true; }
+py_measurement()    { [[ -n "$MEASUREMENT_ARG" ]]   && echo "--measurement $MEASUREMENT_ARG"       || true; }
+py_failure_delay()  { [[ -n "$FAILURE_DELAY_ARG" ]] && echo "--failure-delay $FAILURE_DELAY_ARG"   || true; }
 
 # =============================================================================
 # Command dispatch -- delegates all experiment logic to Python
@@ -266,7 +269,7 @@ phase-c)
 phase-d)
     auto_sync
     PHASE_SESSION="npubsub-phase-d"
-    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_strategy) $(py_warmup) $(py_measurement)"
+    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_strategy) $(py_warmup) $(py_measurement) $(py_failure_delay)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
@@ -277,7 +280,7 @@ phase-d)
 phase-e)
     auto_sync
     PHASE_SESSION="npubsub-phase-e"
-    PY_CMD="python3 -m scripts.run_phase_e $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_warmup) $(py_measurement)"
+    PY_CMD="python3 -m scripts.run_phase_e $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_warmup) $(py_measurement) $(py_failure_delay)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi

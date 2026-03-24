@@ -244,3 +244,121 @@ def test_cross_domain_trust():
     feasible, violations = check_feasibility(placement, dag, topo, gov)
     assert feasible is False
     assert any("trust" in v.lower() or "Governance" in v for v in violations)
+
+
+# ===========================================================================
+# Wildcard slice matching for flat topology (Phase B bug fix)
+# ===========================================================================
+
+
+class TestFlatSliceWildcard:
+    """Flat workers (slice_id='flat') must accept ANY slice requirement.
+
+    In B1/B1eq configurations, all workers register with slice_id='flat'.
+    Pipeline templates define hard slice requirements (URLLC for CQI, eMBB
+    for anomaly). Without wildcard matching, 80% of pipelines are rejected
+    with HTTP 503 because no worker has the required slice.
+    """
+
+    def test_flat_worker_accepts_urllc_stage(self):
+        """A flat worker must accept a stage requiring URLLC slice."""
+        dag = PipelineDAG()
+        dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="URLLC"))
+        flat_node = _simple_node("n_flat", sl="flat")
+        topo = make_topology([flat_node], {})
+        gov = _empty_governance()
+
+        placement = find_placement(dag, topo, gov)
+        assert placement == {"s1": "n_flat"}
+
+    def test_flat_worker_accepts_embb_stage(self):
+        """A flat worker must accept a stage requiring eMBB slice."""
+        dag = PipelineDAG()
+        dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="eMBB"))
+        flat_node = _simple_node("n_flat", sl="flat")
+        topo = make_topology([flat_node], {})
+        gov = _empty_governance()
+
+        placement = find_placement(dag, topo, gov)
+        assert placement == {"s1": "n_flat"}
+
+    def test_flat_worker_accepts_full_cqi_pipeline(self):
+        """Flat workers must accept an entire CQI prediction pipeline (URLLC requirement)."""
+        dag = cqi_prediction_pipeline()
+        # Resolve __local__ sovereignty to match our flat node domain
+        for stage in dag.stages.values():
+            if stage.data_sovereignty_domain == "__local__":
+                stage.data_sovereignty_domain = "d1"
+
+        flat_nodes = [
+            _simple_node(f"n_flat_{i}", sl="flat", domain="d1", capacity=2.0)
+            for i in range(3)
+        ]
+        latencies = {
+            ("n_flat_0", "n_flat_1"): 1.0,
+            ("n_flat_0", "n_flat_2"): 1.0,
+            ("n_flat_1", "n_flat_2"): 0.5,
+        }
+        topo = make_topology(flat_nodes, latencies)
+        gov = _empty_governance()
+
+        placement = find_placement(dag, topo, gov)
+        assert set(placement.keys()) == {"collect", "feature_extract", "predict"}
+
+    def test_flat_worker_accepts_full_anomaly_pipeline(self):
+        """Flat workers must accept an entire anomaly detection pipeline (eMBB requirement)."""
+        from src.pipeline.patterns import anomaly_detection_pipeline
+
+        dag = anomaly_detection_pipeline()
+        flat_nodes = [
+            _simple_node(f"n_flat_{i}", sl="flat", capacity=2.0)
+            for i in range(3)
+        ]
+        latencies = {
+            ("n_flat_0", "n_flat_1"): 1.0,
+            ("n_flat_0", "n_flat_2"): 1.0,
+            ("n_flat_1", "n_flat_2"): 0.5,
+        }
+        topo = make_topology(flat_nodes, latencies)
+        gov = _empty_governance()
+
+        placement = find_placement(dag, topo, gov)
+        assert set(placement.keys()) == {"collect", "feature_extract", "detect"}
+
+    def test_sliced_worker_still_enforces_strict_matching(self):
+        """Regression: non-flat workers must still enforce strict slice matching."""
+        dag = PipelineDAG()
+        dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="URLLC"))
+        embb_node = _simple_node("n_embb", sl="eMBB")
+        # Only an eMBB node available; URLLC stage must fail
+        topo = make_topology([embb_node], {})
+        gov = _empty_governance()
+
+        with pytest.raises(RuntimeError, match="No feasible"):
+            find_placement(dag, topo, gov)
+
+    def test_check_feasibility_flat_worker_no_slice_violation(self):
+        """check_feasibility must not report a slice violation when a flat worker hosts a sliced stage."""
+        dag = PipelineDAG()
+        dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="URLLC"))
+        flat_node = _simple_node("n_flat", sl="flat")
+        topo = make_topology([flat_node], {})
+        gov = _empty_governance()
+
+        placement = {"s1": "n_flat"}
+        feasible, violations = check_feasibility(placement, dag, topo, gov)
+        assert feasible is True
+        assert not any("Slice" in v for v in violations)
+
+    def test_check_feasibility_sliced_mismatch_still_violations(self):
+        """Regression: check_feasibility must still flag non-flat slice mismatches."""
+        dag = PipelineDAG()
+        dag.add_stage(_simple_stage("s1", demand=0.3, slice_req="URLLC"))
+        embb_node = _simple_node("n_embb", sl="eMBB")
+        topo = make_topology([embb_node], {})
+        gov = _empty_governance()
+
+        placement = {"s1": "n_embb"}
+        feasible, violations = check_feasibility(placement, dag, topo, gov)
+        assert feasible is False
+        assert any("Slice" in v for v in violations)

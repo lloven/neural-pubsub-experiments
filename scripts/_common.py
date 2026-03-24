@@ -87,6 +87,7 @@ _CONFIG_TABLE: dict[str, dict] = {
     "B1": {"overlays": [COMPOSE_FLAT], "env": {}, "broker": None},
     "B1eq": {"overlays": [COMPOSE_FLAT_EQ], "env": {}, "broker": None},
     "B2": {"overlays": [], "env": {}, "broker": None},
+    "B2flat": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
     "B3": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
     "B4": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
     # Phase C: cross-site federation (3 configs × 2 transports)
