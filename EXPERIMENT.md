@@ -445,7 +445,68 @@ The experiment must produce data sufficient to evaluate all six hypotheses:
 | Federation enables cross-domain pipelines (H5) | Phase C | C2 successfully routes pipelines across domains that C1 (static) cannot serve | Pending (Phase C not yet executed) |
 | After failure, S3 recovers faster than S1/S2 (H6) | Phase D, E | At medium load: all strategies recover equally (health checks sufficient). At high load + failure (Phase E): S3 recovers faster due to load-aware re-placement. Report detection_time, recovery_time, degradation_depth | Medium-load parity expected; high-load differentiation pending Phase E |
 
-## 10. Reproducibility
+## 10. Experiment Launch Protocol
+
+Every new or modified experiment configuration MUST pass through this protocol before full runs. No exceptions (L32, L37).
+
+### Step 1: Local tests (RED→GREEN)
+```bash
+pytest tests/ -x -v --tb=short
+```
+All tests pass. No new failures.
+
+### Step 2: Local dry-run
+```bash
+python -m scripts.run_phase_X --configs CONFIG --seeds 99 --dry-run
+```
+Verify: correct run_id, correct timing, correct failure target, correct strategy.
+
+### Step 3: Local extended smoke (2.5 min)
+```bash
+python -m scripts.run_phase_X --configs CONFIG --seeds 99 \
+    --warmup 30 --measurement 120 --failure-delay 60
+```
+Verify: CSV produced, treatment effect visible (L38), no silent errors (L39).
+
+### Step 4: Commit + push
+```bash
+git add ... && git commit && git push origin main && git push 5gtn main
+```
+
+### Step 5: Deploy to remote
+```bash
+ssh 5gtn-npubsub "cd ~/neural-pubsub && git fetch origin && git reset --hard origin/main"
+```
+
+### Step 6: Remote dry-run
+```bash
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_phase_X --configs CONFIG --seeds 99 --dry-run"
+```
+
+### Step 7: Remote extended smoke (2.5 min)
+```bash
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_phase_X --configs CONFIG --seeds 99 \
+    --warmup 30 --measurement 120 --failure-delay 60"
+```
+L38: Verify treatment effect. L39: Check for silent errors. Compare against local smoke.
+
+### Step 8: Launch full runs
+```bash
+ssh 5gtn-npubsub "cd ~/neural-pubsub && ./run-experiments.sh phase-X --resume"
+```
+
+### Failure injection experiments: additional checks
+- L38: Every failure config must show measurable treatment effect (changed metrics post-injection)
+- L41: Failure target must be on the critical path
+- Each failure TYPE must be independently smoke-tested (worker kill ≠ broker kill ≠ network partition)
+
+### Fairness invariant
+When comparing strategies (S1/S2/S3), verify the ONLY difference is the placement algorithm:
+- Same health checks, same recovery, same federation, same worker pool
+- Same arrival rate, same pipeline mix, same measurement duration
+- Document any remaining differences explicitly
+
+## 11. Reproducibility
 
 All code, configurations, and analysis scripts are in this repository. To reproduce the experiment on any Docker-capable machine:
 
