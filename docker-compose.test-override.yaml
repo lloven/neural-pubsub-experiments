@@ -1,0 +1,7 @@
+# Test override: remove host port bindings to avoid conflicts with
+# running experiments. Tests use docker exec, not host ports.
+services:
+  broker-d1:
+    ports: !override []
+  broker-d2:
+    ports: !override []
