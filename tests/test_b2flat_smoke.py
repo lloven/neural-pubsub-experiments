@@ -33,6 +33,7 @@ from scripts._common import (
     PROJECT_ROOT,
     _CONFIG_TABLE,
 )
+from scripts.experiment_matrix import expected_run_count
 
 
 COMPOSE_LOCAL = PROJECT_ROOT / "docker-compose.local.yaml"
@@ -184,16 +185,16 @@ class TestB2flatPhaseB:
         assert runs[0].config_name == "B2flat"
 
     def test_phase_b_matrix_with_b2flat_is_correct_size(self):
-        """6 configs (B1,B1eq,B2,B2flat,B3,B4) x 1 transport (HTTP) x 5 seeds = 30 runs."""
+        """All Phase B configs x 1 transport (HTTP) x seeds = expected runs."""
         from scripts.run_phase_b import build_run_matrix, CONFIGS
         runs = build_run_matrix(
             sorted(CONFIGS.keys()),
             [42, 123, 456, 789, 0],
             transports=["http"],
         )
-        assert len(runs) == 6 * 5, (
-            f"Expected 30 runs (6 configs x 1 transport x 5 seeds), "
-            f"got {len(runs)}"
+        expected = expected_run_count("B", transports=["http"])
+        assert len(runs) == expected, (
+            f"Expected {expected} runs, got {len(runs)}"
         )
 
 

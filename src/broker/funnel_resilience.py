@@ -57,6 +57,24 @@ class FunnelPolicyResult:
     pipeline_failed: bool
 
 
+def get_funnel_timeout() -> float:
+    """Read the funnel wait timeout in seconds from FUNNEL_TIMEOUT env var.
+
+    Returns 30.0 if not set (a conservative default that gives workers
+    time to recover before the pipeline is declared failed).
+    """
+    return float(os.environ.get("FUNNEL_TIMEOUT", "30.0"))
+
+
+def get_funnel_grace() -> float:
+    """Read the funnel grace period in seconds from FUNNEL_GRACE env var.
+
+    The grace period is the minimum time to wait before checking whether
+    a predecessor is truly dead vs. merely slow. Returns 5.0 if not set.
+    """
+    return float(os.environ.get("FUNNEL_GRACE", "5.0"))
+
+
 def get_funnel_mode() -> FunnelMode:
     """Read the funnel resilience mode from the FUNNEL_MODE env var.
 

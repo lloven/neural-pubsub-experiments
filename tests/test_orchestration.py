@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 from scripts._common import PROJECT_ROOT
+from scripts.experiment_matrix import expected_run_count
 
 # Compose file paths (constants that resolve_config should use)
 COMPOSE_LOCAL = PROJECT_ROOT / "docker-compose.local.yaml"
@@ -207,14 +208,15 @@ class TestPhaseBOverlays:
         kwargs = self._get_run_kwargs("B4")
         assert kwargs.get("failure_fn") is not None, "B4 must have failure injection"
 
-    def test_phase_b_matrix_is_60_runs(self):
-        """Test 14: 6 configs (B1,B1eq,B2,B2flat,B3,B4) × 2 transports × 5 seeds = 60 runs."""
+    def test_phase_b_matrix_is_expected_runs(self):
+        """Test 14: All Phase B configs x transports x seeds = expected runs."""
         from scripts.run_phase_b import build_run_matrix, CONFIGS
         runs = build_run_matrix(
             list(CONFIGS.keys()),
             [42, 123, 456, 789, 0],
         )
-        assert len(runs) == 60
+        expected = expected_run_count("B")
+        assert len(runs) == expected
 
 
 # ============================================================================

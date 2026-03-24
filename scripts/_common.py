@@ -1,4 +1,4 @@
-"""Shared infrastructure for all phase runner scripts (A through E).
+"""Shared infrastructure for all experiment runner scripts.
 
 Provides:
   - Constants: PROJECT_ROOT, COMPOSE_FILE, DEFAULT_SEEDS.
@@ -12,9 +12,13 @@ Provides:
   - Shared CLI main loop (phase_main) with argparse, config validation,
     combinatorial run matrix execution, and CSV summary generation.
 
-All phase runners (run_phase_a.py through run_phase_d.py) import from this
-module; phase-specific logic is limited to config definitions, run-matrix
-construction, and environment variable mapping.
+All experiment runners (run_baseline.py, run_slicing.py, run_federation.py,
+run_resilience.py, run_stress.py, run_placement.py, run_contention.py)
+import from this module; experiment-specific logic is limited to config
+definitions, run-matrix construction, and environment variable mapping.
+
+Legacy runners (run_phase_a.py through run_phase_e.py) are kept for
+backward compatibility but are superseded by the descriptively named runners.
 """
 
 from __future__ import annotations

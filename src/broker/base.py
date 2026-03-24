@@ -19,6 +19,13 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 
+from src.broker.funnel_resilience import (
+    FunnelMode,
+    FunnelPolicyResult,
+    apply_funnel_policy,
+    get_funnel_mode,
+    get_funnel_timeout,
+)
 from src.broker.models import (
     HealthResponse,
     PipelineState,
@@ -228,24 +235,136 @@ class BaseBroker(abc.ABC):
     # DAG walking (shared)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _find_ready_stages(
+        ps: PipelineState,
+        *,
+        dead_workers: set[str] | None = None,
+    ) -> tuple[list[str], FunnelPolicyResult | None]:
+        """Determine which stages are ready to dispatch, consulting funnel policy.
+
+        For fan-in stages (multiple predecessors) where some predecessors are
+        assigned to dead workers and will never complete, the funnel resilience
+        policy (Section 4.4.3) decides whether to wait, proceed with partial
+        inputs, or abort.
+
+        Args:
+            ps: The pipeline state to inspect.
+            dead_workers: Set of worker IDs known to be dead/unreachable.
+
+        Returns:
+            A tuple of (ready_stage_ids, funnel_policy_result). The funnel
+            result is None when no funnel intervention was needed.
+        """
+        if dead_workers is None:
+            dead_workers = set()
+
+        dag = ps.dag
+        mode = get_funnel_mode()
+        timeout_s = get_funnel_timeout()
+        ready: list[str] = []
+        funnel_result: FunnelPolicyResult | None = None
+
+        for stage_id in dag.stages:
+            if stage_id in ps.completed_stages:
+                continue
+            if stage_id in ps.skipped_stages:
+                continue
+
+            preds = dag.predecessors(stage_id)
+
+            # Check if all predecessors are complete
+            if all(p in ps.completed_stages for p in preds):
+                ready.append(stage_id)
+                continue
+
+            # Check if this is a fan-in stage with dead predecessors
+            if len(preds) <= 1:
+                # Not a fan-in stage; skip funnel logic
+                continue
+
+            # Identify predecessors that are on dead workers and incomplete
+            dead_preds = {
+                p for p in preds
+                if p not in ps.completed_stages
+                and ps.placement.get(p) in dead_workers
+            }
+
+            if not dead_preds:
+                # Missing predecessors are on live workers; just wait normally
+                continue
+
+            # Fan-in stage with dead predecessors: consult funnel policy
+            # Track when we started waiting for this funnel stage
+            if ps.funnel_wait_start is None:
+                ps.funnel_wait_start = time.time()
+
+            timeout_reached = (time.time() - ps.funnel_wait_start) >= timeout_s
+
+            result = apply_funnel_policy(
+                mode=mode,
+                expected_inputs=set(preds),
+                received_inputs=ps.completed_stages & set(preds),
+                timeout_reached=timeout_reached,
+            )
+            funnel_result = result
+
+            if result.action == "proceed":
+                # Mark dead predecessors as skipped and proceed
+                ps.skipped_stages |= dead_preds
+                ps.partial = True
+                ready.append(stage_id)
+
+            elif result.action == "abort":
+                # Do not add to ready; caller should fail the pipeline
+                pass
+
+            elif result.action == "wait":
+                # Do not add to ready; keep waiting
+                pass
+
+            elif result.action == "fail":
+                # Timeout reached in wait mode
+                pass
+
+        return ready, funnel_result
+
     async def _dispatch_ready_stages(self, ps: PipelineState) -> None:
         """Dispatch all stages whose predecessors have completed.
 
         Acquires _pipelines_lock to read completed_stages safely.
+        Consults the funnel resilience policy for fan-in stages with
+        dead predecessors.
         """
         if ps.failed:
             return
 
-        dag = ps.dag
-        ready = []
+        # Determine dead workers (workers in placement but not in registry)
+        dead_workers: set[str] = set()
+        async with self._workers_lock:
+            live_workers = set(self._workers.keys())
+        placement_workers = set(ps.placement.values())
+        dead_workers = placement_workers - live_workers
 
         async with self._pipelines_lock:
-            for stage_id in dag.stages:
-                if stage_id in ps.completed_stages:
-                    continue
-                preds = dag.predecessors(stage_id)
-                if all(p in ps.completed_stages for p in preds):
-                    ready.append(stage_id)
+            ready, funnel_result = self._find_ready_stages(
+                ps, dead_workers=dead_workers,
+            )
+
+        # Handle funnel policy results
+        if funnel_result is not None and funnel_result.pipeline_failed:
+            error_msg = (
+                f"funnel_{funnel_result.action}: pipeline failed due to "
+                f"funnel resilience policy ({funnel_result.action} mode)"
+            )
+            async with self._pipelines_lock:
+                ps.failed = True
+                ps.error = error_msg
+                self._active_pipelines.pop(ps.pipeline_id, None)
+            await self._metrics.complete_pipeline(
+                ps.pipeline_id, success=False, error=error_msg,
+            )
+            return
 
         if not ready:
             return

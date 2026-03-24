@@ -13,18 +13,18 @@
 #   ./run-experiments.sh [--remote] COMMAND [OPTIONS]
 #
 # Commands:
-#   smoke                Quick smoke test (~2 min)
-#   phase-a [--resume]   Phase A: single-site baselines (60 runs)
-#   phase-a5             Phase A.5: placement quality micro-benchmark
-#   phase-a6 [--resume]  Phase A.6: resource contention (15 runs)
-#   phase-b [--resume]   Phase B: slice-aware placement (20 runs)
-#   phase-c [--resume]   Phase C: cross-site federation (needs HOST_D2)
-#   phase-d [--resume]   Phase D: failure resilience (20 runs)
-#   phase-e [--resume]   Phase E: combined H3+H6 contention + failure (40 runs)
+#   smoke                   Quick smoke test (~2 min)
+#   baseline [--resume]     Single-site baselines (was Phase A)
+#   placement               Placement quality micro-benchmark (was Phase A.5)
+#   contention [--resume]   Resource contention (15 runs, was Phase A.6)
+#   slicing [--resume]      Slice-aware placement (was Phase B)
+#   federation [--resume]   Cross-site federation (needs HOST_D2, was Phase C)
+#   resilience [--resume]   Failure resilience (was Phase D)
+#   stress [--resume]       Combined contention + failure (60 runs, was Phase E)
 #   single CONFIG RATE STAGES SEED   Single run with explicit parameters
-#   stop                 Stop all containers
-#   status               Show progress for all phases
-#   sync                 Push code + rebuild on remote (no experiments)
+#   stop                    Stop all containers
+#   status                  Show progress for all phases
+#   sync                    Push code + rebuild on remote (no experiments)
 #
 # Options:
 #   --remote             Execute on remote host (configured in .env.local)
@@ -208,79 +208,79 @@ smoke)
     rcmd "python3 -m scripts.run_smoke_test $SMOKE_ARGS"
     ;;
 
-# --- Phase A -----------------------------------------------------------------
-phase-a)
+# --- Baseline (was Phase A) --------------------------------------------------
+baseline|phase-a)
     auto_sync
-    PHASE_SESSION="npubsub-phase-a"
-    PY_CMD="python3 -m scripts.run_phase_a $(py_resume)"
+    PHASE_SESSION="npubsub-baseline"
+    PY_CMD="python3 -m scripts.run_baseline $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
     rcmd "$PY_CMD"
     ;;
 
-# --- Phase A.5 ---------------------------------------------------------------
-phase-a5)
+# --- Placement (was Phase A.5) -----------------------------------------------
+placement|phase-a5)
     auto_sync
-    rcmd "python3 -m scripts.run_phase_a5_a6 --phase a5"
+    rcmd "python3 -m scripts.run_placement $(py_dry_run)"
     ;;
 
-# --- Phase A.6 ---------------------------------------------------------------
-phase-a6)
+# --- Contention (was Phase A.6) ----------------------------------------------
+contention|phase-a6)
     auto_sync
-    PHASE_SESSION="npubsub-phase-a6"
-    PY_CMD="python3 -m scripts.run_phase_a5_a6 --phase a6 $(py_resume)"
+    PHASE_SESSION="npubsub-contention"
+    PY_CMD="python3 -m scripts.run_contention $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
     rcmd "$PY_CMD"
     ;;
 
-# --- Phase B -----------------------------------------------------------------
-phase-b)
+# --- Slicing (was Phase B) ---------------------------------------------------
+slicing|phase-b)
     auto_sync
-    PHASE_SESSION="npubsub-phase-b"
-    PY_CMD="python3 -m scripts.run_phase_b $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
+    PHASE_SESSION="npubsub-slicing"
+    PY_CMD="python3 -m scripts.run_slicing $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
     rcmd "$PY_CMD"
     ;;
 
-# --- Phase C -----------------------------------------------------------------
-phase-c)
+# --- Federation (was Phase C) ------------------------------------------------
+federation|phase-c)
     if [[ -z "${HOST_D2:-}" ]]; then
-        err "Phase C requires HOST_D2 to be set in .env.local"
+        err "Federation requires HOST_D2 to be set in .env.local"
         exit 1
     fi
     auto_sync
     if [[ -n "$REMOTE_MODE" ]]; then
         sync_host "$HOST_D2" "${HOST_D2_DIR:?}" "${HOST_D2_GIT:?}"
     fi
-    PHASE_SESSION="npubsub-phase-c"
-    PY_CMD="python3 -m scripts.run_phase_c $(py_resume)"
+    PHASE_SESSION="npubsub-federation"
+    PY_CMD="python3 -m scripts.run_federation $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
     rcmd "$PY_CMD"
     ;;
 
-# --- Phase D -----------------------------------------------------------------
-phase-d)
+# --- Resilience (was Phase D) ------------------------------------------------
+resilience|phase-d)
     auto_sync
-    PHASE_SESSION="npubsub-phase-d"
-    PY_CMD="python3 -m scripts.run_phase_d $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_strategy) $(py_warmup) $(py_measurement) $(py_failure_delay)"
+    PHASE_SESSION="npubsub-resilience"
+    PY_CMD="python3 -m scripts.run_resilience $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_strategy) $(py_warmup) $(py_measurement) $(py_failure_delay)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
     rcmd "$PY_CMD"
     ;;
 
-# --- Phase E -----------------------------------------------------------------
-phase-e)
+# --- Stress (was Phase E) ----------------------------------------------------
+stress|phase-e)
     auto_sync
-    PHASE_SESSION="npubsub-phase-e"
-    PY_CMD="python3 -m scripts.run_phase_e $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_warmup) $(py_measurement) $(py_failure_delay)"
+    PHASE_SESSION="npubsub-stress"
+    PY_CMD="python3 -m scripts.run_stress $(py_resume) $(py_dry_run) $(py_configs) $(py_seeds) $(py_warmup) $(py_measurement) $(py_failure_delay)"
     if maybe_tmux_wrap "$PHASE_SESSION" "$PY_CMD"; then
         exit 0
     fi
@@ -289,10 +289,10 @@ phase-e)
 
 # --- Single run --------------------------------------------------------------
 single)
-    CONFIG="${1:?Usage: $0 single CONFIG RATE STAGES SEED}"
-    RATE="${2:?}"
-    STAGES="${3:?}"
-    SEED="${4:?}"
+    CONFIG="${remaining_args[0]:?Usage: $0 single CONFIG RATE STAGES SEED}"
+    RATE="${remaining_args[1]:?}"
+    STAGES="${remaining_args[2]:?}"
+    SEED="${remaining_args[3]:?}"
 
     auto_sync
     rcmd "python3 -m scripts.run_single $CONFIG $RATE $STAGES $SEED"
@@ -315,7 +315,7 @@ status)
     if [[ -n "$REMOTE_MODE" ]]; then
         remote_flag="--remote $TARGET_HOST"
     fi
-    for phase in phase_a phase_b phase_c phase_d phase_e; do
+    for phase in baseline placement slicing federation resilience stress contention; do
         python3 -m scripts.monitor --once $remote_flag "results/$phase" 2>/dev/null || true
     done
     ;;
@@ -339,18 +339,20 @@ sync)
 Usage: ./run-experiments.sh [--remote] COMMAND [OPTIONS]
 
 Commands:
-  smoke                Quick smoke test (~2 min)
-  phase-a [--resume]   Phase A: single-site baselines (60 runs)
-  phase-a5             Phase A.5: placement quality micro-benchmark
-  phase-a6 [--resume]  Phase A.6: resource contention (15 runs)
-  phase-b [--resume]   Phase B: slice-aware placement (20 runs)
-  phase-c [--resume]   Phase C: cross-site federation (needs HOST_D2)
-  phase-d [--resume]   Phase D: failure resilience (20 runs)
-  phase-e [--resume]   Phase E: combined H3+H6 contention + failure (40 runs)
+  smoke                   Quick smoke test (~2 min)
+  baseline [--resume]     Single-site baselines (was Phase A)
+  placement               Placement quality micro-benchmark (was Phase A.5)
+  contention [--resume]   Resource contention (15 runs, was Phase A.6)
+  slicing [--resume]      Slice-aware placement (was Phase B)
+  federation [--resume]   Cross-site federation (needs HOST_D2, was Phase C)
+  resilience [--resume]   Failure resilience (was Phase D)
+  stress [--resume]       Combined contention + failure (60 runs, was Phase E)
   single CONFIG RATE STAGES SEED   Single run
-  stop                 Stop all containers
-  status               Show progress for all phases
-  sync                 Push code + rebuild on remote (no experiments)
+  stop                    Stop all containers
+  status                  Show progress for all phases
+  sync                    Push code + rebuild on remote (no experiments)
+
+Legacy aliases: phase-a, phase-a5, phase-a6, phase-b, phase-c, phase-d, phase-e
 
 Options:
   --remote             Execute on remote host (from .env.local)
@@ -358,8 +360,8 @@ Options:
 
 Examples:
   ./run-experiments.sh smoke
-  ./run-experiments.sh single A2 medium 3 42
-  ./run-experiments.sh --remote phase-b --resume
+  ./run-experiments.sh single rr medium 3 42
+  ./run-experiments.sh --remote slicing --resume
   ./run-experiments.sh --remote sync
 HELP
     ;;

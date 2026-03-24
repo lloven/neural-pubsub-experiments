@@ -119,6 +119,20 @@ configs/
   smoke_test.yaml           # Smoke test config (short duration, limited pipelines)
 ```
 
+## Experiment Matrix
+
+The full experiment structure (phases, configs, seeds, transports, expected run counts) is defined in `scripts/experiment_matrix.py`. This is the single source of truth for all run count calculations and test assertions.
+
+```bash
+# Print the current matrix summary
+python -m scripts.experiment_matrix
+
+# Or from Python
+from scripts.experiment_matrix import print_summary, expected_run_count
+print_summary()
+expected_run_count("stress")  # => 60
+```
+
 ## Experiment Phases
 
 | Phase | Purpose                          | Script                      | Key configs                         |

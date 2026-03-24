@@ -1,0 +1,97 @@
+nohup: .venv/bin/python: No such file or directory
+Traceback (most recent call last):
+  File "/Users/lloven/Dropbox/Research/workspace/5 Support/Groups/FCG/Experiments/neural-pubsub/scripts/run_phase_a.py", line 28, in <module>
+    from scripts._common import (
+ModuleNotFoundError: No module named 'scripts'
+INFO:scripts._common:Phase A: 360 runs planned
+INFO:scripts._common:[RESUME MODE] 5 runs already completed, will skip them
+INFO:scripts._common:--- Run 1/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-42 (rate=2.0, stages=2, seed=42, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-42 failed with exit code 1
+INFO:scripts._common:--- Run 2/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-123 (rate=2.0, stages=2, seed=123, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-123 failed with exit code 1
+INFO:scripts._common:--- Run 3/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-456 (rate=2.0, stages=2, seed=456, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-456 failed with exit code 1
+INFO:scripts._common:--- Run 4/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-789 (rate=2.0, stages=2, seed=789, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-789 failed with exit code 1
+INFO:scripts._common:--- Run 5/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-0 (rate=2.0, stages=2, seed=0, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-0 failed with exit code 1
+INFO:scripts._common:--- Run 6/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-7 (rate=2.0, stages=2, seed=7, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-7 failed with exit code 1
+INFO:scripts._common:--- Run 7/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-2024 (rate=2.0, stages=2, seed=2024, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-2024 failed with exit code 1
+INFO:scripts._common:--- Run 8/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-31415 (rate=2.0, stages=2, seed=31415, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-31415 failed with exit code 1
+INFO:scripts._common:--- Run 9/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-271828 (rate=2.0, stages=2, seed=271828, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-271828 failed with exit code 1
+INFO:scripts._common:--- Run 10/360 ---
+INFO:__main__:Run: A1_rate-low_stages-2_seed-1337 (rate=2.0, stages=2, seed=1337, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-2-seed-1337 failed with exit code 1
+INFO:scripts._common:--- Run 11/360 ---
+INFO:__main__:Run: A1_rate-low_stages-3_seed-42 (rate=2.0, stages=3, seed=42, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-3-seed-42 failed with exit code 1
+INFO:scripts._common:--- Run 12/360 ---
+INFO:__main__:Run: A1_rate-low_stages-3_seed-123 (rate=2.0, stages=3, seed=123, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-3-seed-123 failed with exit code 1
+INFO:scripts._common:--- Run 13/360 ---
+INFO:__main__:Run: A1_rate-low_stages-3_seed-456 (rate=2.0, stages=3, seed=456, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-3-seed-456 failed with exit code 1
+INFO:scripts._common:--- Run 14/360 ---
+INFO:__main__:Run: A1_rate-low_stages-3_seed-789 (rate=2.0, stages=3, seed=789, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+ERROR:scripts._common:Project npubsub-a1-rate-low-stages-3-seed-789 failed with exit code 1
+INFO:scripts._common:--- Run 15/360 ---
+INFO:__main__:Run: A1_rate-low_stages-3_seed-0 (rate=2.0, stages=3, seed=0, strategy=kafka, duration=2400s)
+ Image bitnami/kafka:latest Pulling 
+ Image bitnami/kafka:latest Error manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+Error response from daemon: manifest for bitnami/kafka:latest not found: manifest unknown: manifest unknown
+nohup: .venv/bin/python: No such file or directory

@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from scripts._common import DEFAULT_SEEDS, PROJECT_ROOT
+from scripts.experiment_matrix import expected_run_count, get_configs
 
 
 # ---------------------------------------------------------------------------
@@ -27,11 +28,11 @@ class TestPhaseEConfigs:
     """Phase E has 8 configs: E1-E8, varying rate (10/20), strategy (S1/S3),
     and failure (none / worker kill)."""
 
-    def test_has_exactly_eight_configs(self):
+    def test_has_expected_configs(self):
         from scripts.run_phase_e import CONFIGS
-        assert len(CONFIGS) == 8, (
-            f"Expected 8 configs (E1-E8), got {len(CONFIGS)}: "
-            f"{sorted(CONFIGS.keys())}"
+        expected_configs = get_configs("E")
+        assert sorted(CONFIGS.keys()) == sorted(expected_configs), (
+            f"Expected configs {sorted(expected_configs)}, got {sorted(CONFIGS.keys())}"
         )
 
     def test_all_config_names_present(self):
@@ -164,18 +165,20 @@ class TestPhaseETiming:
 class TestPhaseEMatrix:
     """Phase E run matrix: 8 configs x 5 seeds = 40 runs."""
 
-    def test_full_matrix_is_40_runs(self):
-        """8 configs x 5 seeds = 40 runs."""
+    def test_full_matrix_is_expected_runs(self):
+        """All configs x seeds = expected_run_count('E') runs."""
         from scripts.run_phase_e import CONFIGS, build_run_matrix
         matrix = build_run_matrix(list(CONFIGS.keys()), DEFAULT_SEEDS)
-        assert len(matrix) == 40, f"Expected 40 runs, got {len(matrix)}"
+        expected = expected_run_count("E")
+        assert len(matrix) == expected, f"Expected {expected} runs, got {len(matrix)}"
 
     def test_all_run_ids_unique(self):
-        """All 40 runs must have unique run_ids for resume tracking."""
+        """All runs must have unique run_ids for resume tracking."""
         from scripts.run_phase_e import CONFIGS, build_run_matrix
         matrix = build_run_matrix(list(CONFIGS.keys()), DEFAULT_SEEDS)
         run_ids = [r.run_id for r in matrix]
-        assert len(set(run_ids)) == 40, f"Duplicate run_ids found"
+        expected = expected_run_count("E")
+        assert len(set(run_ids)) == expected, f"Duplicate run_ids found"
 
     def test_run_id_includes_rate(self):
         """run_id must include the arrival rate for disambiguation."""
@@ -261,8 +264,8 @@ class TestPhaseECLI:
         assert result.returncode == 0
         assert "Phase E" in result.stdout or "phase_e" in result.stdout.lower()
 
-    def test_dry_run_reports_40_runs(self):
-        """--dry-run with all configs should report 40 runs planned."""
+    def test_dry_run_reports_expected_runs(self):
+        """--dry-run with all configs should report expected runs planned."""
         result = subprocess.run(
             [sys.executable, "-m", "scripts.run_phase_e", "--dry-run"],
             capture_output=True, text=True, timeout=10,
@@ -270,8 +273,9 @@ class TestPhaseECLI:
             env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
         )
         output = result.stdout + result.stderr
-        assert "40 runs planned" in output, (
-            f"Expected 40 runs planned, got:\n{output[-1000:]}"
+        expected = expected_run_count("E")
+        assert f"{expected} runs planned" in output, (
+            f"Expected {expected} runs planned, got:\n{output[-1000:]}"
         )
 
     def test_warmup_and_measurement_override(self):

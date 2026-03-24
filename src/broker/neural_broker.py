@@ -840,25 +840,42 @@ class NeuralBroker:
     ) -> None:
         """Dispatch all stages whose predecessors have completed.
 
-        A stage is ready when every predecessor stage_id is in
-        ``pipeline_state.completed_stages``. Source stages (no predecessors)
-        are ready immediately.
+        Uses the shared ``BaseBroker._find_ready_stages`` helper to consult
+        the funnel resilience policy for fan-in stages with dead predecessors.
 
         Args:
             pipeline_state: The pipeline to advance.
         """
+        from src.broker.base import BaseBroker
+
         if pipeline_state.failed:
             return
 
-        dag = pipeline_state.dag
-        ready: list[str] = []
+        # Determine dead workers (workers in placement but not in registry)
+        dead_workers: set[str] = set()
+        async with self._workers_lock:
+            live_workers = set(self._workers.keys())
+        placement_workers = set(pipeline_state.placement.values())
+        dead_workers = placement_workers - live_workers
 
-        for stage_id in dag.stages:
-            if stage_id in pipeline_state.completed_stages:
-                continue
-            preds = dag.predecessors(stage_id)
-            if all(p in pipeline_state.completed_stages for p in preds):
-                ready.append(stage_id)
+        ready, funnel_result = BaseBroker._find_ready_stages(
+            pipeline_state, dead_workers=dead_workers,
+        )
+
+        # Handle funnel policy results
+        if funnel_result is not None and funnel_result.pipeline_failed:
+            error_msg = (
+                f"funnel_{funnel_result.action}: pipeline failed due to "
+                f"funnel resilience policy ({funnel_result.action} mode)"
+            )
+            async with self._pipelines_lock:
+                pipeline_state.failed = True
+                pipeline_state.error = error_msg
+                self._active_pipelines.pop(pipeline_state.pipeline_id, None)
+            await self._metrics.complete_pipeline(
+                pipeline_state.pipeline_id, success=False, error=error_msg,
+            )
+            return
 
         if not ready:
             return
