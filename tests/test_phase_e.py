@@ -289,3 +289,43 @@ class TestPhaseECLI:
         assert "duration=150s" in output, (
             f"Expected duration=150s, got:\n{output[-1000:]}"
         )
+
+    def test_failure_delay_override(self):
+        """--failure-delay should override default failure_delay_s."""
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.run_phase_e",
+             "--configs", "E7", "--seeds", "42",
+             "--warmup", "30", "--measurement", "120",
+             "--failure-delay", "60", "--dry-run"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(PROJECT_ROOT),
+            env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"--failure-delay flag not accepted:\n{output[-1000:]}"
+        )
+        assert "inject_at=60s" in output, (
+            f"Expected inject_at=60s, got:\n{output[-1000:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Failure delay validation
+# ---------------------------------------------------------------------------
+
+class TestPhaseEFailureDelay:
+    """Failure delay must be overridable and passed to build_run_matrix."""
+
+    def test_build_matrix_with_failure_delay_override(self):
+        """build_run_matrix should accept failure_delay_s kwarg."""
+        from scripts.run_phase_e import build_run_matrix
+        matrix = build_run_matrix(["E7"], [42], failure_delay_s=60)
+        assert len(matrix) == 1
+        assert matrix[0].failure_delay_s == 60
+
+    def test_build_matrix_default_failure_delay(self):
+        """Without override, failure_delay_s should be 300."""
+        from scripts.run_phase_e import build_run_matrix
+        matrix = build_run_matrix(["E7"], [42])
+        assert matrix[0].failure_delay_s == 300

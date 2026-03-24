@@ -158,6 +158,7 @@ class WorkloadGenerator:
         self.config = config
         self._rng = np.random.default_rng(config.seed)
         self._total_generated: int = 0
+        self._rejected_submissions: int = 0
         self._by_type: dict[str, int] = {k: 0 for k in self._TEMPLATES}
         self._run_start: Optional[float] = None
         self._publish_semaphore = asyncio.Semaphore(self._MAX_CONCURRENT_PUBLISHES)
@@ -322,11 +323,22 @@ class WorkloadGenerator:
         elapsed = time.time() - self._run_start
         stats = self.get_stats()
         logger.info(
-            "Workload generator finished: %d requests in %.1f s (actual rate=%.2f req/s).",
+            "Workload generator finished: %d requests in %.1f s "
+            "(actual rate=%.2f req/s, rejected=%d).",
             stats["total_generated"],
             elapsed,
             stats["actual_rate"],
+            stats["rejected_submissions"],
         )
+        if stats["rejected_submissions"] > 0:
+            logger.warning(
+                "REJECTED SUBMISSIONS: %d out of %d requests were rejected by "
+                "the broker (%.1f%%). Check slice configuration and worker "
+                "availability.",
+                stats["rejected_submissions"],
+                stats["total_generated"],
+                100.0 * stats["rejected_submissions"] / max(stats["total_generated"], 1),
+            )
 
         # Request broker to export metrics CSV before we exit
         result_file = self.config.metadata.get("result_file", "")
@@ -412,8 +424,10 @@ class WorkloadGenerator:
                 request.pipeline_type,
             )
         except Exception as exc:  # noqa: BLE001
+            self._rejected_submissions += 1
             logger.warning(
-                "Failed to publish request %s: %s", request.request_id, exc
+                "Failed to publish request %s (rejected #%d): %s",
+                request.request_id, self._rejected_submissions, exc,
             )
 
     # ------------------------------------------------------------------
@@ -471,6 +485,8 @@ class WorkloadGenerator:
                 - ``by_type`` (dict[str, int]): Per-template request counts.
                 - ``actual_rate`` (float): Observed generation rate (req/s),
                   or 0.0 if the generator has not started yet.
+                - ``rejected_submissions`` (int): Number of publish attempts
+                  that failed (e.g. HTTP 503 from broker). L39: no silent errors.
         """
         elapsed = (time.time() - self._run_start) if self._run_start else 0.0
         actual_rate = (self._total_generated / elapsed) if elapsed > 0 else 0.0
@@ -478,6 +494,7 @@ class WorkloadGenerator:
             "total_generated": self._total_generated,
             "by_type": dict(self._by_type),
             "actual_rate": actual_rate,
+            "rejected_submissions": self._rejected_submissions,
         }
 
 
@@ -521,6 +538,63 @@ def load_config(path: str) -> WorkloadConfig:
         broker_url=str(raw["broker_url"]),
         seed=int(raw.get("seed", 42)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline mix from environment variables
+# ---------------------------------------------------------------------------
+
+
+# Default pipeline mix when no env vars or config file override it.
+_DEFAULT_PIPELINE_MIX = {
+    "cqi_prediction": 0.4,
+    "anomaly_detection": 0.4,
+    "sensor_fusion": 0.2,
+}
+
+
+def build_pipeline_mix_from_env() -> dict[str, float]:
+    """Build a pipeline mix from PIPELINE_MIX_* environment variables.
+
+    Reads PIPELINE_MIX_CQI, PIPELINE_MIX_ANOMALY, and PIPELINE_MIX_FUSION
+    from the environment. If all three are present and sum to 1.0, uses them.
+    Otherwise falls back to the default mix (40/40/20).
+
+    This wires the env vars set by run_phase_b.py (and other phase runners)
+    to the workload generator, fixing the dead-code bug where PIPELINE_MIX_*
+    env vars were set but never consumed.
+
+    Returns:
+        Pipeline mix dict with keys matching template names.
+    """
+    cqi = os.environ.get("PIPELINE_MIX_CQI")
+    anomaly = os.environ.get("PIPELINE_MIX_ANOMALY")
+    fusion = os.environ.get("PIPELINE_MIX_FUSION")
+
+    if cqi is not None and anomaly is not None and fusion is not None:
+        try:
+            mix = {
+                "cqi_prediction": float(cqi),
+                "anomaly_detection": float(anomaly),
+                "sensor_fusion": float(fusion),
+            }
+            total = sum(mix.values())
+            if abs(total - 1.0) > 1e-6:
+                logger.warning(
+                    "PIPELINE_MIX_* env vars sum to %.6f (not 1.0); "
+                    "falling back to default mix.",
+                    total,
+                )
+                return dict(_DEFAULT_PIPELINE_MIX)
+            return mix
+        except ValueError:
+            logger.warning(
+                "PIPELINE_MIX_* env vars contain non-numeric values; "
+                "falling back to default mix."
+            )
+            return dict(_DEFAULT_PIPELINE_MIX)
+
+    return dict(_DEFAULT_PIPELINE_MIX)
 
 
 # ---------------------------------------------------------------------------
@@ -599,11 +673,7 @@ def main() -> None:
         cfg = WorkloadConfig(
             arrival_rate=args.arrival_rate,
             duration_s=args.duration_s,
-            pipeline_mix={
-                "cqi_prediction": 0.4,
-                "anomaly_detection": 0.4,
-                "sensor_fusion": 0.2,
-            },
+            pipeline_mix=build_pipeline_mix_from_env(),
             broker_url=args.broker_url,
             seed=args.seed,
             warmup_s=float(args.warmup_s),

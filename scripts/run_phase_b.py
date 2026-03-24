@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Phase B: Slice-aware placement.
 
-Runs 5 configurations on a single site with multiple network slices:
-  B1   -- Neural Pub/Sub, 1 slice, 3 workers (original flat baseline)
-  B1eq -- Neural Pub/Sub, 1 slice, 5 workers (equalized flat baseline)
-  B2   -- Neural Pub/Sub, 3 slices, no governance
-  B3   -- Neural Pub/Sub, 3 slices + governance constraints
-  B4   -- Neural Pub/Sub, 3 slices + governance + failure injection at t=15min
+Runs 6 configurations on a single site with multiple network slices:
+  B1     -- Neural Pub/Sub, 1 slice, 3 workers (original flat baseline)
+  B1eq   -- Neural Pub/Sub, 1 slice, 5 workers (equalized flat baseline)
+  B2     -- Neural Pub/Sub, 3 slices, no governance (neural placement)
+  B2flat -- Neural Pub/Sub, 3 slices, no governance (round-robin placement)
+  B3     -- Neural Pub/Sub, 3 slices + governance constraints
+  B4     -- Neural Pub/Sub, 3 slices + governance + failure injection at t=15min
 
 B1eq uses the same worker count as B2 (5 workers) on a flat network with a
 single broker, isolating the slice-awareness effect from worker count.
+
+B2flat uses the same sliced topology as B2 (2 brokers, 5 workers, 3 slices)
+but with round-robin placement instead of neural placement, isolating the
+infrastructure effect (network slicing) from the algorithm effect (placement
+intelligence).  Comparison: B2flat - B1eq = infrastructure contribution,
+B2 - B2flat = algorithm contribution.
 
 Per configuration:
   5 seeds x medium workload x 3-stage pipeline.
@@ -57,6 +64,7 @@ CONFIGS = {
     "B1": {"num_slices": 1, "governance": False, "failure_injection": False},
     "B1eq": {"num_slices": 1, "governance": False, "failure_injection": False},
     "B2": {"num_slices": 3, "governance": False, "failure_injection": False},
+    "B2flat": {"num_slices": 3, "governance": False, "failure_injection": False},
     "B3": {"num_slices": 3, "governance": True, "failure_injection": False},
     "B4": {"num_slices": 3, "governance": True, "failure_injection": True},
 }
@@ -121,9 +129,13 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         seed=run.seed, transport=run.transport,
     )
 
+    # Determine placement strategy: configs that specify a static broker
+    # (e.g., B2flat) use their own PLACEMENT env var; others default to neural.
+    placement = resolved.env.get("PLACEMENT", "neural")
+
     env = {
         **resolved.env,
-        "PLACEMENT_STRATEGY": "neural",
+        "PLACEMENT_STRATEGY": placement,
         "ARRIVAL_RATE": str(DEFAULT_RATE_VALUE),
         "DURATION_S": str(total_duration),
         "SEED": str(run.seed),

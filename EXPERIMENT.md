@@ -43,7 +43,7 @@ The experiment answers three questions about distributing AI inference pipelines
 | **Failure type** | None, eMBB worker kill, URLLC worker kill, funnel worker kill with wait/proceed/abort modes (Phase D); broker kill, network partition (Phase C) | Tests resilience mechanisms |
 | **Funnel mode** | wait, proceed, abort (Phase D only, D3-D5) | Tests funnel pipeline behaviour under partial input loss |
 
-**Transport note:** Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference). All phases after Phase A use HTTP exclusively.
+**Transport note:** Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference). All phases after Phase B use HTTP exclusively. See Section 4b for details.
 
 ### Dependent variables (metrics)
 
@@ -77,7 +77,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 ### Phase A: Single-site baselines
 
-**Purpose:** Establish performance of four distribution strategies on a single domain. This is the core comparison that answers RQ1 and tests H1-H2.
+**Purpose:** Establish that Neural Pub/Sub introduces no measurable overhead compared to static baselines in the homogeneous (unconstrained) case. This validates H1 only. Phase A does **not** test placement quality under heterogeneity or contention (those are tested in Phases B and E respectively).
 
 | Config | Strategy | Description |
 |--------|----------|-------------|
@@ -85,6 +85,8 @@ The experiment answers three questions about distributing AI inference pipelines
 | A2 | Static placement (round-robin) | HTTP-based dispatch. Workers receive stages in round-robin order. No semantic awareness. |
 | A3 | Random placement | HTTP-based dispatch. Workers selected uniformly at random. Lower bound baseline. |
 | A4 | Neural Pub/Sub (single broker) | Full semantic routing with embedding-based matching and weighted placement algorithm (Eq. 10). |
+
+**Worker pool parity (resolved):** The original topology gave NeuralBroker (S3) access to workers in both domains via federation, while StaticBroker (S1/S2) could only see domain-1 workers (no federation). This resource asymmetry has been resolved: StaticBroker now includes federation support, ensuring all strategies see the same worker pool. See the "Fairness invariant" section below.
 
 **Matrix:** 4 configs x 3 rates x 3 complexities x 5 seeds = 180 runs.
 **Per run:** 10-min warm-up + 30-min measurement = 40 min.
@@ -108,11 +110,15 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Results:** All 5 scenarios achieved gap_ratio = 0.0 (optimal placement). Results stored in `results/phase_a5_a6/`.
 
+**Scope limitation:** All 5 current scenarios produce tree-structured DAGs (linear chains or funnels), which are handled by the provably optimal DP solver (`_dp_placement`). The greedy heuristic (`_greedy_placement`) for general (non-tree) DAGs is never exercised. The gap_ratio = 0.0 result confirms the DP implementation is correct but does not validate the greedy path. Non-tree scenarios (e.g., diamond DAGs) are being developed to exercise the greedy solver and provide a meaningful optimality gap measurement.
+
 **Runtime:** < 1 minute (pure computation, no Docker).
 
 ### Phase A.6: Resource contention
 
 **Purpose:** Validate graceful degradation under overload. Tests whether the system handles arrival rates exceeding aggregate capacity without catastrophic failure (starvation, deadlock, unbounded queue growth).
+
+**Strategy scope:** Currently tests S3 (Neural Pub/Sub) only. Phase A.6 is a stress test for the neural broker, not an H3 comparison across strategies. The proper H3 comparison (S1 vs S3 under contention + failure) is tested in Phase E.
 
 **Matrix:** 3 configs x 5 seeds = 15 runs. Per run: 2-min warmup + 10-min measurement = 12 min (~3 hours total). Supports `--warmup` and `--measurement` overrides for custom timing.
 
@@ -134,18 +140,30 @@ The experiment answers three questions about distributing AI inference pipelines
 
 | Config | Slices | Governance | Failure | What it tests |
 |--------|--------|------------|---------|---------------|
-| B1 | 1 (flat) | Off | None | Baseline: no slice awareness |
-| B2 | 3 (URLLC, eMBB, mMTC) | Off | None | Value of slice-aware placement |
+| B1 | 1 (flat) | Off | None | Baseline: no slice awareness (3 workers, D1 only) |
+| B1eq | 1 (flat, equalized) | Off | None | Worker-count control (5 workers, all in D1, single flat network) |
+| B2flat | 2 domains, flat placement | Off | None | Infrastructure isolation only, no slice-aware algorithm (being developed) |
+| B2 | 3 (URLLC, eMBB, mMTC) | Off | None | Full slice-aware placement (2 brokers, 2 domains, per-slice networks) |
 | B3 | 3 | On | None | Governance overhead on sliced deployment |
 | B4 | 3 | On | Worker kill at t=15min | Resilience under slice constraints |
 
+**Confound decomposition plan:** The original B1eq vs B2 comparison changes three variables simultaneously: (1) number of brokers/domains, (2) network topology (flat vs per-slice isolation), and (3) the placement algorithm's slice awareness. To decompose the effect:
+- **B1eq** (baseline): 5 workers, 1 broker, 1 domain, flat network, no slice awareness.
+- **B2flat** (infrastructure only): 5 workers, 2 brokers, 2 domains, per-slice networks, but placement algorithm treats all workers as flat (no slice affinity). Isolates the infrastructure effect.
+- **B2** (infrastructure + algorithm): 5 workers, 2 brokers, 2 domains, per-slice networks, full slice-aware placement. The B2flat-to-B2 delta isolates the algorithm's contribution.
+
+**Throughput anomaly (under investigation):** B1/B1eq achieve only 1.0 pps throughput at 5.0 pps arrival rate, while B2 achieves 5.0 pps. The paper reports 100% completion for B1eq, but the throughput gap suggests either (a) the flat configs receive a lower effective arrival rate, or (b) there is pipeline acceptance throttling. This is under investigation before results can be published.
+
+**Clean comparisons:** B2 vs B3 (governance overhead) is a single-variable comparison and produces a clean result (0.0% overhead). HTTP vs Kafka transport orthogonality (<0.7% difference) is also clean.
+
 **Transport:** HTTP only (orthogonality with Kafka proven in Phase B; see note above).
 
-**Matrix:** 4 configs x 1 rate (medium) x 1 complexity (3-stage) x 5 seeds = 20 runs.
-**Per run:** 40 min. **Total:** ~13h.
+**Matrix:** 6 configs x 1 rate (medium) x 1 complexity (3-stage) x 5 seeds = 30 runs.
+**Per run:** 40 min. **Total:** ~20h.
 
 **Expected outputs:**
 - Latency breakdown (per-stage, cross-slice overhead)
+- Effect decomposition: infrastructure effect (B1eq vs B2flat) and algorithm effect (B2flat vs B2)
 - Governance violation count (B3, B4: expected 0)
 - Adaptation timeline (B4: detection time, re-placement time, completion rate recovery)
 
@@ -186,6 +204,10 @@ The Neural Pub/Sub is the **broker** (semantic routing and placement), not the t
 
 **Transport:** HTTP only (orthogonality proven in Phase B).
 
+**StaticBroker fairness (resolved):** The StaticBroker now includes health checks, dead-worker removal, failed-stage re-placement, and federation (identical to NeuralBroker's infrastructure). This ensures that S1/S2 vs S3 comparisons isolate the placement algorithm, not the monitoring infrastructure. See the "Fairness invariant" section below.
+
+**H6 reframing:** At medium load (5 pps), health checks provide resilience regardless of placement strategy. All strategies (S1, S2, S3) recover from single-worker failure within the health check detection window because surviving workers have sufficient headroom. The differentiating test is Phase E, where high load (20 pps) combined with failure forces the placement algorithm to make non-trivial decisions on scarce surviving capacity.
+
 D1 and D2 target different slice-specific workers to test whether failure impact depends on the worker's role in the pipeline topology. D3-D5 test funnel pipeline behaviour under different `FUNNEL_MODE` settings when a contributing worker is killed.
 
 | Config | Failure type | Injection time | Expected behaviour |
@@ -202,6 +224,10 @@ D1 and D2 target different slice-specific workers to test whether failure impact
 - Funnel tests: 3 configs (D3/D4/D5) x 5 seeds = 15 runs
 - **Total: 45 runs** (30 for H6 comparison + 15 for funnel tests)
 
+**S1/S2 comparison runs:** Fair S1/S2 vs S3 comparison is in progress using the updated StaticBroker with health checks and federation. Previous S1/S2 runs (59% failure rate) were confounded by missing health monitoring and are superseded.
+
+**D3-D5 funnel modes:** Deferred pending broker integration of funnel mode dispatch. The architecture defines three modes (wait/proceed/abort) but the broker does not yet propagate the `FUNNEL_MODE` setting to the pipeline execution path.
+
 Federation-level failures (broker kill, network partition) are tested in Phase C configs C4-C5, which provide the cross-domain traffic necessary for meaningful treatment effects.
 
 **Recovery analysis:** Post-hoc recovery time metrics are computed by `scripts/analyze_recovery.py` from Phase D data, reporting: detection_time, recovery_time, degradation_depth, and failed_pipelines.
@@ -211,7 +237,7 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 - Pipeline completion rate: before, during (30s window around failure), and after recovery
 - Comparison of recovery time across worker roles (eMBB vs. URLLC)
 - Comparison of recovery time vs. configuration parameters (health check interval, propagation interval)
-- Funnel mode comparison: completion rate, latency, and data completeness across wait/proceed/abort modes
+- Funnel mode comparison: completion rate, latency, and data completeness across wait/proceed/abort modes (deferred)
 - Strategy comparison (S1/S2/S3) for D1-D2: recovery behaviour under different placement strategies
 
 ### Phase E: Combined H3+H6 contention + failure
@@ -221,6 +247,10 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 **Transport:** HTTP only (orthogonality proven in Phase B).
 
 **Rationale:** Medium-load D results motivated this experiment. The key insight is that intelligent placement only matters when resources are scarce: at capacity, any strategy works; at overload + failure, load-aware re-placement should significantly outperform blind round-robin.
+
+**Prerequisite (resolved):** Phase E was blocked by the StaticBroker fairness issue (S1/S2 lacked health checks and federation, making failure comparisons meaningless). The StaticBroker fix is now in place. Phase E is ready for smoke + full run after Phase D S1/S2 fair comparison completes.
+
+**This is the proper H3+H6 test.** Phase D establishes that health checks alone provide recovery at medium load. Phase E tests whether the placement *algorithm* (not just the monitoring infrastructure) provides additional benefit under high load + failure, where surviving workers are near saturation and placement decisions are non-trivial.
 
 | Config | Rate | Strategy | Failure | Tests |
 |--------|------|----------|---------|-------|
@@ -264,6 +294,30 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 - Comparison: flat federation vs. hierarchical federation
 
 **Note:** Phase F is a stretch goal. Paper claims 1-6 (H1-H4, H6) are covered by Phases A-E on the real testbed.
+
+## 4b. Cross-Phase Design Notes
+
+### Transport orthogonality
+
+Transport (HTTP vs Kafka) was validated as orthogonal in Phase B (<0.7% difference via ANOVA). All phases after Phase B use HTTP exclusively. This eliminates transport as a confound in Phases C, D, and E, allowing those phases to isolate their target variables (federation, failure, contention).
+
+### Fairness invariant
+
+**S1, S2, and S3 differ ONLY in the placement algorithm.** All three strategies now share identical infrastructure:
+
+| Capability | S1 (round-robin) | S2 (random) | S3 (neural) |
+|------------|-------------------|-------------|-------------|
+| Health check loop | Yes (5s interval, 3 failures = dead) | Yes | Yes |
+| Dead worker removal | Yes | Yes | Yes |
+| Failed stage re-placement | Yes (re-pick via round-robin) | Yes (re-pick via random) | Yes (re-solve placement) |
+| Dispatch-time recovery | Yes (retry with next worker) | Yes (retry with random worker) | Yes (evict + re-solve) |
+| Federation | Yes (summary propagation, cross-domain forwarding) | Yes | Yes |
+| Governance enforcement | Yes (constraint check before placement) | Yes | Yes |
+| Worker pool | Same (all registered workers across federated brokers) | Same | Same |
+
+The only variable is the placement decision: S1 cycles through workers in registration order, S2 selects uniformly at random, and S3 solves the cost-optimized placement (Eq. 10) considering latency, load, and governance constraints.
+
+This invariant was established by adding health checks, recovery, and federation to `StaticBroker` (previously these were only in `NeuralBroker`). Earlier results where S1/S2 lacked these capabilities are superseded.
 
 ## 5. Baselines
 
@@ -382,14 +436,14 @@ The sentence embedding model (all-MiniLM-L6-v2) is still used for federation rou
 
 The experiment must produce data sufficient to evaluate all six hypotheses:
 
-| Claim | Data source | Minimum evidence |
-|-------|------------|-----------------|
-| Intelligent placement outperforms baselines under heterogeneity (H1) | Phase B | B2 (3-slice Neural) p95 latency < A2 (static) p95 latency with p < 0.05 (KS test on per-pipeline latency distributions) |
-| Throughput parity with capabilities (H2) | Phase A | A4 throughput >= 0.85 x A1 throughput at all tested rates |
-| Slice-aware placement reduces latency (H3) | Phase B | B2 p95 < B1 p95 with p < 0.05 |
-| Governance overhead is bounded (H4) | Phase B, C | Report B3/B2 and C3/C2 latency ratios with confidence intervals |
-| Federation scales linearly (H5) | Phase C, E | If Phase E completed: summary bandwidth proportional to domain count under hierarchical topology. If not: report 2-domain overhead and state scaling as conjecture |
-| Recovery within bounded time (H6) | Phase C, D | Report detection time and re-placement time separately (5 seeds per config). One-sample Wilcoxon signed-rank test: both < 2 x summary_interval_s for D1-D2 (worker failures) and C4-C5 (federation failures). Strategy comparison (S1/S2/S3) for D1-D2 via `--strategy all`. Funnel mode comparison (D3-D5) reports completion rate and data completeness |
+| Claim | Data source | Minimum evidence | Status |
+|-------|------------|-----------------|--------|
+| S3 introduces no overhead in the homogeneous case (H1) | Phase A | S3 latency within 2% of S1/S2 at all tested rates | Confirmed |
+| S3 placement achieves optimal/near-optimal cost (H2) | Phase A.5 | gap_ratio < 0.05 on representative scenarios including non-tree DAGs | DP path confirmed (gap=0.0); greedy path pending (non-tree scenarios in development) |
+| Under contention, S3 maintains lower tail latency (H3) | Phase E | E7 vs E8: S3 p95 < S1 p95 at 20 pps + failure, with p < 0.05 | Pending (blocked on Phase D S1/S2 completion) |
+| Slice-aware placement reduces latency (H4) | Phase B | B2flat vs B2: algorithm effect isolated from infrastructure effect. B2 p95 < B2flat p95 with p < 0.05 | Partially confirmed (B1eq vs B2 shows 15% reduction but confounded; B2flat decomposition in development) |
+| Federation enables cross-domain pipelines (H5) | Phase C | C2 successfully routes pipelines across domains that C1 (static) cannot serve | Pending (Phase C not yet executed) |
+| After failure, S3 recovers faster than S1/S2 (H6) | Phase D, E | At medium load: all strategies recover equally (health checks sufficient). At high load + failure (Phase E): S3 recovers faster due to load-aware re-placement. Report detection_time, recovery_time, degradation_depth | Medium-load parity expected; high-load differentiation pending Phase E |
 
 ## 10. Reproducibility
 
