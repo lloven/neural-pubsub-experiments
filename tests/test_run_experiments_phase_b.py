@@ -335,3 +335,41 @@ class TestDispatcherPhaseDPassthrough:
         assert "D1" in output, (
             f"--configs D1 should produce D1 runs.\nOutput:\n{output[-2000:]}"
         )
+
+
+class TestDispatcherNewFlags:
+    """Tests for --strategy, --warmup, --measurement forwarding."""
+
+    def test_strategy_flag_parsed(self):
+        """Dispatcher parses --strategy."""
+        result = run_root_script("phase-d", "--strategy", "S1,S2", "--dry-run", timeout=15)
+        assert result.returncode == 0
+        assert "S1" in result.stdout or "S1" in result.stderr
+
+    def test_strategy_forwarded_to_python(self):
+        """--strategy is forwarded as --strategy to the Python runner."""
+        result = run_root_script("phase-d", "--strategy", "S1", "--configs", "D1", "--seeds", "42", "--dry-run", timeout=15)
+        combined = result.stdout + result.stderr
+        assert "S1" in combined
+        assert "D1_failure-worker_S1_seed-42" in combined
+
+    def test_warmup_flag_forwarded(self):
+        """--warmup changes the total duration (warmup + default measurement)."""
+        result = run_root_script("phase-d", "--warmup", "30", "--configs", "D1", "--seeds", "42", "--dry-run", timeout=15)
+        combined = result.stdout + result.stderr
+        # warmup=30 + measurement=600 (default) = 630s
+        assert "duration=630s" in combined
+
+    def test_measurement_flag_forwarded(self):
+        """--measurement changes the total duration (default warmup + measurement)."""
+        result = run_root_script("phase-d", "--measurement", "120", "--configs", "D1", "--seeds", "42", "--dry-run", timeout=15)
+        combined = result.stdout + result.stderr
+        # warmup=120 (default) + measurement=120 = 240s
+        assert "duration=240s" in combined
+
+    def test_both_timing_flags_forwarded(self):
+        """--warmup + --measurement together produce exact short-smoke duration."""
+        result = run_root_script("phase-d", "--warmup", "30", "--measurement", "120", "--configs", "D1", "--seeds", "42", "--dry-run", timeout=15)
+        combined = result.stdout + result.stderr
+        # warmup=30 + measurement=120 = 150s
+        assert "duration=150s" in combined
