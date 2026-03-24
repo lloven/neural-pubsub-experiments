@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from scripts._common import PROJECT_ROOT
+from scripts.experiment_matrix import expected_run_count
 
 
 # Compose file paths
@@ -219,16 +220,16 @@ class TestB1eqPhaseB:
         assert len(runs) >= 1
         assert all(r.config_name == "B1eq" for r in runs)
 
-    def test_phase_b_matrix_with_b1eq_is_60_runs(self):
-        """6 configs (B1,B1eq,B2,B2flat,B3,B4) x 2 transports x 5 seeds = 60 runs."""
+    def test_phase_b_matrix_with_b1eq_is_expected_runs(self):
+        """All Phase B configs x transports x seeds = expected runs."""
         from scripts.run_phase_b import build_run_matrix, CONFIGS
         runs = build_run_matrix(
             sorted(CONFIGS.keys()),
             [42, 123, 456, 789, 0],
         )
-        assert len(runs) == 60, (
-            f"Expected 60 runs (6 configs x 2 transports x 5 seeds), "
-            f"got {len(runs)}"
+        expected = expected_run_count("B")
+        assert len(runs) == expected, (
+            f"Expected {expected} runs, got {len(runs)}"
         )
 
     def test_b1eq_run_uses_flat_equalized_overlay(self):

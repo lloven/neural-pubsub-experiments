@@ -19,7 +19,7 @@ import yaml
 from pathlib import Path
 
 from scripts._common import PROJECT_ROOT
-from scripts.run_phase_d import CONFIGS
+from scripts.run_resilience import CONFIGS
 
 
 # ---------------------------------------------------------------------------
@@ -59,21 +59,21 @@ def _load_compose_networks() -> set[str]:
 class TestFailureTargetsMatchCompose:
     """Every CONFIGS failure_target must exist in the compose files."""
 
-    def test_d1_worker_target_is_real_service(self):
-        """D1 (worker failure) target must be an actual compose service."""
+    def test_embb_kill_worker_target_is_real_service(self):
+        """embb-kill (worker failure) target must be an actual compose service."""
         services = _load_compose_services()
-        target = CONFIGS["D1"]["failure_target"]
+        target = CONFIGS["embb-kill"]["failure_target"]
         assert target in services, (
-            f"D1 failure_target '{target}' not found in compose services: "
+            f"embb-kill failure_target '{target}' not found in compose services: "
             f"{sorted(services)}"
         )
 
-    def test_d2_worker_target_is_real_service(self):
-        """D2 (URLLC worker failure) target must be an actual compose service."""
+    def test_urllc_kill_worker_target_is_real_service(self):
+        """urllc-kill (URLLC worker failure) target must be an actual compose service."""
         services = _load_compose_services()
-        target = CONFIGS["D2"]["failure_target"]
+        target = CONFIGS["urllc-kill"]["failure_target"]
         assert target in services, (
-            f"D2 failure_target '{target}' not found in compose services: "
+            f"urllc-kill failure_target '{target}' not found in compose services: "
             f"{sorted(services)}"
         )
 
@@ -189,12 +189,12 @@ class TestFailureComposeOverlay:
             f"All services need restart: 'no' during failure injection."
         )
 
-    def test_phase_d_uses_failure_overlay(self):
-        """run_phase_d.py must reference the failure overlay compose file."""
-        with open(PROJECT_ROOT / "scripts" / "run_phase_d.py") as f:
+    def test_resilience_uses_failure_overlay(self):
+        """run_resilience.py must reference the failure overlay compose file."""
+        with open(PROJECT_ROOT / "scripts" / "run_resilience.py") as f:
             content = f.read()
         assert "failure" in content.lower() and "compose" in content.lower(), (
-            "run_phase_d.py must reference the failure compose overlay"
+            "run_resilience.py must reference the failure compose overlay"
         )
 
 
@@ -237,9 +237,9 @@ class TestPhaseDDetachedMode:
         )
 
     def test_phase_d_passes_detached_true(self):
-        """run_phase_d._run must pass detached=True to run_single."""
+        """run_resilience._run must pass detached=True to run_single."""
         import inspect
-        from scripts.run_phase_d import _run
+        from scripts.run_resilience import _run
         source = inspect.getsource(_run)
         assert "detached" in source and "True" in source, (
             "Phase D _run() must pass detached=True to run_single()"
@@ -253,30 +253,30 @@ class TestPhaseDDetachedMode:
 class TestProjectNameConsistency:
     """The project name used by _make_failure_fn must match run_single's."""
 
-    def test_phase_d_project_name_matches_run_single(self):
+    def test_resilience_project_name_matches_run_single(self):
         """_run() must normalize project_name the same way run_single does."""
-        from scripts.run_phase_d import RunConfig
+        from scripts.run_resilience import RunConfig
         rc = RunConfig(
-            config_name="D1", seed=42,
+            config_name="embb-kill", seed=42,
             failure_type="worker", failure_target="worker-d1-embb-1",
         )
         # What _run produces
-        run_id = rc.run_id  # "D1_failure-worker_seed-42"
-        phase_d_project = f"npubsub-{run_id.lower().replace('_', '-')}"
+        run_id = rc.run_id
+        resilience_project = f"npubsub-{run_id.lower().replace('_', '-')}"
 
         # What run_single produces
         run_single_project = f"npubsub-{run_id.lower().replace('_', '-')}"
 
-        assert phase_d_project == run_single_project, (
-            f"Project name mismatch: _run={phase_d_project}, "
+        assert resilience_project == run_single_project, (
+            f"Project name mismatch: _run={resilience_project}, "
             f"run_single={run_single_project}"
         )
 
     def test_project_name_is_lowercase_with_hyphens(self):
         """Docker project names must be lowercase with hyphens (no underscores)."""
-        from scripts.run_phase_d import RunConfig
+        from scripts.run_resilience import RunConfig
         rc = RunConfig(
-            config_name="D2", seed=789,
+            config_name="urllc-kill", seed=789,
             failure_type="worker", failure_target="worker-d1-urllc-1",
         )
         run_id = rc.run_id
@@ -305,7 +305,7 @@ class TestD2UrllcWorkerKill:
 
     def test_d2_failure_type_uses_kill_path(self):
         """D2 failure_type must route through inject_compose_kill."""
-        d2_type = CONFIGS["D2"]["failure_type"]
+        d2_type = CONFIGS["urllc-kill"]["failure_type"]
         kill_types = {"worker", "broker"}
         assert d2_type in kill_types, (
             f"D2 failure_type is '{d2_type}', must be one of {kill_types} "
@@ -314,7 +314,7 @@ class TestD2UrllcWorkerKill:
 
     def test_d2_targets_urllc_worker(self):
         """D2 must target a URLLC worker (CQI/sensor pipeline handler)."""
-        target = CONFIGS["D2"]["failure_target"]
+        target = CONFIGS["urllc-kill"]["failure_target"]
         assert "urllc" in target.lower(), (
             f"D2 failure_target '{target}' is not a URLLC worker. "
             f"D2 must target a URLLC worker because CQI (sensor) pipelines "
@@ -327,8 +327,8 @@ class TestD2UrllcWorkerKill:
         D1 tests eMBB worker failure. D2 tests URLLC worker failure.
         They must target different workers to test distinct failure modes.
         """
-        d1_target = CONFIGS["D1"]["failure_target"]
-        d2_target = CONFIGS["D2"]["failure_target"]
+        d1_target = CONFIGS["embb-kill"]["failure_target"]
+        d2_target = CONFIGS["urllc-kill"]["failure_target"]
         assert d1_target != d2_target, (
             f"D1 and D2 target the same worker '{d1_target}'. "
             f"D2 must target a URLLC worker, while D1 targets an eMBB worker."
@@ -337,11 +337,11 @@ class TestD2UrllcWorkerKill:
     def test_d2_make_failure_fn_returns_kill_partial(self):
         """_make_failure_fn for D2 must return a partial wrapping
         inject_compose_kill."""
-        from scripts.run_phase_d import _make_failure_fn, RunConfig
+        from scripts.run_resilience import _make_failure_fn, RunConfig
         rc = RunConfig(
-            config_name="D2", seed=42,
-            failure_type=CONFIGS["D2"]["failure_type"],
-            failure_target=CONFIGS["D2"]["failure_target"],
+            config_name="urllc-kill", seed=42,
+            failure_type=CONFIGS["urllc-kill"]["failure_type"],
+            failure_target=CONFIGS["urllc-kill"]["failure_target"],
         )
         project_name = f"npubsub-{rc.run_id.lower().replace('_', '-')}"
         env = {"SEED": "42"}

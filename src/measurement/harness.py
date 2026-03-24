@@ -96,6 +96,7 @@ class PipelineTrace:
     placement: dict[str, str] = field(default_factory=dict)
     success: bool = False
     error: Optional[str] = None
+    partial: bool = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -372,6 +373,7 @@ class MetricsCollector:
         pipeline_id: str,
         success: bool,
         error: Optional[str] = None,
+        partial: bool = False,
     ) -> None:
         """Mark a pipeline as complete and record the wall-clock end time.
 
@@ -379,6 +381,8 @@ class MetricsCollector:
             pipeline_id: The pipeline to mark.
             success:     True if it completed without error.
             error:       Optional error message for failed pipelines.
+            partial:     True if the pipeline completed with partial inputs
+                         (funnel proceed mode).
         """
         async with self._lock:
             self._wall_end = time.time()
@@ -391,6 +395,7 @@ class MetricsCollector:
             trace = self._traces[pipeline_id]
             trace.success = success
             trace.error = error
+            trace.partial = partial
 
     # ------------------------------------------------------------------
     # Retrieval
@@ -546,6 +551,7 @@ class MetricsCollector:
                 "pipeline_id",
                 "pipeline_type",
                 "success",
+                "partial",
                 "error",
                 "e2e_latency_ms",
                 "throughput_pps",
@@ -577,6 +583,7 @@ class MetricsCollector:
                     "pipeline_id": t.pipeline_id,
                     "pipeline_type": t.pipeline_type,
                     "success": t.success,
+                    "partial": t.partial,
                     "error": t.error or "",
                     "e2e_latency_ms": t.end_to_end_latency_ms() or "",
                     "throughput_pps": f"{agg.throughput_per_sec:.4f}",

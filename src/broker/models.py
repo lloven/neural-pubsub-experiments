@@ -120,6 +120,10 @@ class PipelineState:
     failed: bool = False
     error: Optional[str] = None
     all_stages: set[str] = field(default_factory=set, init=False, repr=False)
+    # Funnel resilience fields (Section 4.4.3)
+    partial: bool = False
+    skipped_stages: set[str] = field(default_factory=set)
+    funnel_wait_start: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.all_stages = set(self.dag.stages.keys())

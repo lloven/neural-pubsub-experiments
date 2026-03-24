@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from scripts._common import DEFAULT_SEEDS, EXTENDED_SEEDS
+from scripts.experiment_matrix import expected_run_count, get_configs, get_seeds
 from scripts.run_phase_d import (
     CONFIGS,
     STRATEGIES,
@@ -61,15 +62,17 @@ class TestPhaseDMatrix:
         )
 
     def test_full_matrix_size(self):
-        """5 configs x 10 seeds = 50 runs."""
+        """configs x seeds = expected_run_count('D') runs."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        assert len(matrix) == 50, f"Expected 50 runs, got {len(matrix)}"
+        expected = expected_run_count("D")
+        assert len(matrix) == expected, f"Expected {expected} runs, got {len(matrix)}"
 
     def test_single_config_matrix(self):
-        """Single config × 5 default seeds = 5 runs."""
+        """Single config x default seeds = expected runs."""
         from scripts._common import DEFAULT_SEEDS
         matrix = build_run_matrix(["D1"], DEFAULT_SEEDS)
-        assert len(matrix) == 5
+        expected = expected_run_count("D", configs=["D1"], seeds=DEFAULT_SEEDS)
+        assert len(matrix) == expected
 
     def test_all_configs_have_failure_type(self):
         """Every config must define a failure_type and target."""
@@ -116,8 +119,9 @@ class TestPhaseDRunId:
         """All 50 runs in the full matrix must have unique run_ids."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
         run_ids = [r.run_id for r in matrix]
-        assert len(run_ids) == 50
-        assert len(set(run_ids)) == 50, f"Duplicate run_ids found"
+        expected = expected_run_count("D")
+        assert len(run_ids) == expected
+        assert len(set(run_ids)) == expected, f"Duplicate run_ids found"
 
 
 class TestPhaseDConfigs:
@@ -126,11 +130,11 @@ class TestPhaseDConfigs:
     Network partition moved to Phase C where cross-domain traffic makes it
     meaningful."""
 
-    def test_configs_has_exactly_five_entries(self):
-        """Phase D must have exactly 5 configs: D1-D5."""
-        assert len(CONFIGS) == 5, (
-            f"Expected 5 configs (D1-D5), got {len(CONFIGS)}: "
-            f"{sorted(CONFIGS.keys())}"
+    def test_configs_has_expected_entries(self):
+        """Phase D configs must match the experiment matrix."""
+        expected_configs = get_configs("D")
+        assert sorted(CONFIGS.keys()) == sorted(expected_configs), (
+            f"Expected configs {sorted(expected_configs)}, got {sorted(CONFIGS.keys())}"
         )
 
     def test_d2_target_is_urllc_worker(self):
@@ -156,10 +160,11 @@ class TestPhaseDConfigs:
             f"Expected configs {{D1, D2, D3, D4, D5}}, got {set(CONFIGS.keys())}"
         )
 
-    def test_full_matrix_size_is_50(self):
-        """5 configs x 10 seeds = 50 runs."""
+    def test_full_matrix_size(self):
+        """All configs x extended seeds = expected_run_count('D') runs."""
         matrix = build_run_matrix(list(CONFIGS.keys()), EXTENDED_SEEDS)
-        assert len(matrix) == 50, f"Expected 50 runs, got {len(matrix)}"
+        expected = expected_run_count("D")
+        assert len(matrix) == expected, f"Expected {expected} runs, got {len(matrix)}"
 
 
 class TestPhaseDDefaultSeeds:
@@ -303,13 +308,16 @@ class TestPhaseDStrategyMatrix:
     """--strategy all produces configs x 3 strategies x seeds runs."""
 
     def test_strategy_all_matrix_d1_d2_default_seeds(self):
-        """2 configs x 3 strategies x 5 default seeds = 30 runs (H6 comparison)."""
+        """2 configs x 3 strategies x default seeds runs (H6 comparison)."""
         matrix = build_run_matrix(
             ["D1", "D2"], DEFAULT_SEEDS, strategies=["S1", "S2", "S3"],
         )
-        assert len(matrix) == 30, (
-            f"Expected 30 runs (2 configs x 3 strategies x 5 seeds), "
-            f"got {len(matrix)}"
+        expected = expected_run_count(
+            "D", configs=["D1", "D2"], seeds=DEFAULT_SEEDS,
+            strategies=["S1", "S2", "S3"],
+        )
+        assert len(matrix) == expected, (
+            f"Expected {expected} runs, got {len(matrix)}"
         )
 
     def test_strategy_all_full_configs_default_seeds(self):
@@ -330,7 +338,11 @@ class TestPhaseDStrategyMatrix:
             ["D1", "D2"], DEFAULT_SEEDS, strategies=["S1", "S2", "S3"],
         )
         run_ids = [r.run_id for r in matrix]
-        assert len(set(run_ids)) == 30, f"Duplicate run_ids in strategy-all matrix"
+        expected = expected_run_count(
+            "D", configs=["D1", "D2"], seeds=DEFAULT_SEEDS,
+            strategies=["S1", "S2", "S3"],
+        )
+        assert len(set(run_ids)) == expected, f"Duplicate run_ids in strategy-all matrix"
 
     def test_single_strategy_matrix_unchanged(self):
         """Passing strategies=['S3'] must give the same count as no strategy arg."""

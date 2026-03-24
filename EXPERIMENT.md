@@ -7,6 +7,8 @@
 
 ---
 
+> **Single source of truth:** The authoritative experiment matrix (phases, configs, seeds, and transports) is defined in `scripts/experiment_matrix.py`. All test assertions and run count calculations derive from this single source. Run `python -m scripts.experiment_matrix` for the current matrix summary.
+
 ## 1. Research Questions
 
 The experiment answers three questions about distributing AI inference pipelines across a federated 6G computing continuum:
@@ -88,10 +90,9 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Worker pool parity (resolved):** The original topology gave NeuralBroker (S3) access to workers in both domains via federation, while StaticBroker (S1/S2) could only see domain-1 workers (no federation). This resource asymmetry has been resolved: StaticBroker now includes federation support, ensuring all strategies see the same worker pool. See the "Fairness invariant" section below.
 
-**Matrix:** 4 configs x 3 rates x 3 complexities x 5 seeds = 180 runs.
+**Matrix:** See `experiment_matrix.py` for current config and seed counts (baseline phase).
 **Per run:** 10-min warm-up + 30-min measurement = 40 min.
-**Total runtime:** 120h sequential; ~30h on 4 parallel nodes.
-**Fallback:** 4 x 2 rates x 3 complexities x 3 seeds = 72 runs (~48h sequential, ~12h parallel).
+**Total runtime:** See `expected_run_count("baseline")` for the authoritative count.
 
 **Expected outputs:**
 - Latency CDF plots (A1-A4 overlaid, per complexity level)
@@ -120,7 +121,7 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Strategy scope:** Currently tests S3 (Neural Pub/Sub) only. Phase A.6 is a stress test for the neural broker, not an H3 comparison across strategies. The proper H3 comparison (S1 vs S3 under contention + failure) is tested in Phase E.
 
-**Matrix:** 3 configs x 5 seeds = 15 runs. Per run: 2-min warmup + 10-min measurement = 12 min (~3 hours total). Supports `--warmup` and `--measurement` overrides for custom timing.
+**Matrix:** See `expected_run_count("contention")` in `experiment_matrix.py` for current counts. Per run: 2-min warmup + 10-min measurement = 12 min. Supports `--warmup` and `--measurement` overrides for custom timing.
 
 | Config | Arrival rate | Workers | Expected behaviour |
 |--------|-------------|---------|-------------------|
@@ -158,8 +159,8 @@ The experiment answers three questions about distributing AI inference pipelines
 
 **Transport:** HTTP only (orthogonality with Kafka proven in Phase B; see note above).
 
-**Matrix:** 6 configs x 1 rate (medium) x 1 complexity (3-stage) x 5 seeds = 30 runs.
-**Per run:** 40 min. **Total:** ~20h.
+**Matrix:** See `expected_run_count("slicing")` in `experiment_matrix.py` for current counts.
+**Per run:** 40 min.
 
 **Expected outputs:**
 - Latency breakdown (per-stage, cross-slice overhead)
@@ -185,7 +186,7 @@ The Neural Pub/Sub is the **broker** (semantic routing and placement), not the t
 
 **Pipeline:** CQI prediction. The `collect` and `preprocess` stages must stay in the originating domain (governance); the `predict` stage can be placed in either domain.
 
-**Matrix:** 5 configs x 1 rate (medium) x 5 seeds = 25 runs.
+**Matrix:** See `expected_run_count("federation")` in `experiment_matrix.py` for current counts.
 
 **Status:** Pending execution on distributed testbed (Nakao Lab or laptop+5GTN fallback).
 
@@ -220,9 +221,9 @@ D1 and D2 target different slice-specific workers to test whether failure impact
 
 **Strategy dimension:** `--strategy S1|S2|S3|all`
 - Default: S3 only (for D3/D4/D5 funnel tests)
-- For H6 comparison: `--strategy all` with D1,D2 runs S1/S2/S3 x 2 configs x 5 seeds = 30 runs
-- Funnel tests: 3 configs (D3/D4/D5) x 5 seeds = 15 runs
-- **Total: 45 runs** (30 for H6 comparison + 15 for funnel tests)
+- For H6 comparison: `--strategy all` with D1,D2 runs S1/S2/S3 x 2 configs x seeds
+- Funnel tests: D3/D4/D5 configs x seeds
+- **Total:** See `expected_run_count("resilience")` in `experiment_matrix.py` for current counts
 
 **S1/S2 comparison runs:** Fair S1/S2 vs S3 comparison is in progress using the updated StaticBroker with health checks and federation. Previous S1/S2 runs (59% failure rate) were confounded by missing health monitoring and are superseded.
 
@@ -263,7 +264,7 @@ Federation-level failures (broker kill, network partition) are tested in Phase C
 | E7 | 20 pps | S1 | eMBB worker kill @300s | **H3+H6 key cell** |
 | E8 | 20 pps | S3 | eMBB worker kill @300s | **H3+H6 key cell** |
 
-**Matrix:** 8 configs x 5 seeds = 40 runs x 12 min = ~8 hours.
+**Matrix:** See `expected_run_count("stress")` in `experiment_matrix.py` for current counts (12 configs x 5 seeds = 60 runs after 50pps addition). ~12 min per run.
 
 **Failure target:** `worker-d1-embb-1` (on critical path for anomaly-detection pipelines). Uses `docker-compose.failure.yaml` overlay to disable container restart.
 
@@ -418,7 +419,7 @@ Results are exported as CSV via the broker's `/metrics/export` endpoint or by th
 
 ### Run ordering
 
-Phase A runs (180 configurations) are executed in randomized order to mitigate ordering effects (thermal throttling, Docker daemon state drift, host system load variation). The randomization seed is fixed for reproducibility. Phases B-D are smaller matrices (20 runs each) and are run sequentially by configuration, with a 60-second cool-down between runs.
+Phase A runs are executed in randomized order to mitigate ordering effects (thermal throttling, Docker daemon state drift, host system load variation). The randomization seed is fixed for reproducibility. See `experiment_matrix.py` for per-phase run counts. Smaller phases are run sequentially by configuration, with a 60-second cool-down between runs.
 
 ### Steady-state validation
 
@@ -459,7 +460,7 @@ All tests pass. No new failures.
 ```bash
 python -m scripts.run_phase_X --configs CONFIG --seeds 99 --dry-run
 ```
-Verify: correct run_id, correct timing, correct failure target, correct strategy.
+Verify: correct run_id, correct timing, correct failure target, correct strategy. Verify run count matches `expected_run_count(phase)` from `scripts/experiment_matrix.py`.
 
 ### Step 3: Local extended smoke (2.5 min)
 ```bash

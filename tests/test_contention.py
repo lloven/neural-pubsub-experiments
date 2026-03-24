@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from scripts._common import DEFAULT_SEEDS
+from scripts.experiment_matrix import expected_run_count, get_configs
 from scripts.run_phase_a5_a6 import (
     CONTENTION_CONFIGS,
     FAILURE_KILL_WORKERS,
@@ -120,7 +121,8 @@ class TestContentionMatrix:
         matrix = build_contention_matrix(
             list(CONTENTION_CONFIGS.keys()), DEFAULT_SEEDS,
         )
-        assert len(matrix) == 15
+        expected = expected_run_count("A6")
+        assert len(matrix) == expected
 
     def test_single_config_matrix(self):
         matrix = build_contention_matrix(["A6.1"], [42])
