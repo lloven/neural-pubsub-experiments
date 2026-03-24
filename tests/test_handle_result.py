@@ -315,30 +315,21 @@ class TestDuplicateResult:
 
     @pytest.mark.asyncio
     async def test_duplicate_intermediate_does_not_double_dispatch(self):
-        """Reporting s0 twice in a chain should not dispatch s1 twice."""
+        """Reporting s0 twice in a chain must not dispatch s1 twice.
+
+        A duplicate result for a completed intermediate stage must not cause
+        its successor to be re-dispatched. The system must track dispatched
+        (in-flight) stages, not just completed stages.
+        """
         broker, ps = _make_broker_with_pipeline(_two_stage_chain_dag())
         await broker._handle_result(_make_result(stage_id="s0"))
-        dispatch_count_before = len(broker.dispatched_stages)
 
         await broker._handle_result(_make_result(stage_id="s0"))
-        dispatch_count_after = len(broker.dispatched_stages)
 
-        # s1 should have been dispatched exactly once (from the first result).
-        # The second result adds s0 to completed_stages again (set, so no-op),
-        # and _dispatch_ready_stages finds s1 already dispatched... but wait,
-        # s1 is not in completed_stages yet, so it will be re-dispatched.
-        #
-        # BUG EXPOSURE: _handle_result does not track dispatched (in-flight)
-        # stages, only completed stages. A duplicate result for s0 will cause
-        # s1 to be dispatched again because s1 is not in completed_stages and
-        # all its predecessors (just s0) are in completed_stages.
-        #
-        # Documenting the actual behavior: the second result DOES dispatch s1
-        # again. This is a potential bug (duplicate work, not idempotent).
         s1_dispatches = [d for d in broker.dispatched_stages if d == ("pipe-1", "s1")]
-        # This assertion documents the CURRENT behavior. If idempotency is
-        # desired, this should be == 1 (and the code needs a fix).
-        assert len(s1_dispatches) >= 1, "s1 should be dispatched at least once"
+        assert len(s1_dispatches) == 1, (
+            f"s1 should be dispatched exactly once, but was dispatched {len(s1_dispatches)} times"
+        )
 
 
 # ===================================================================
@@ -550,18 +541,7 @@ class TestGovernanceViolationsCounter:
 
     @pytest.mark.asyncio
     async def test_violations_are_cumulative_across_pipelines(self):
-        """Violations accumulate across multiple pipeline runs.
-
-        NOTE: This tests MetricsCollector behavior, not _handle_result directly.
-        governance_violations is a global counter (len of list), not per-pipeline.
-        This means the CSV export writes the same total for every row.
-
-        BUG EXPOSURE: In export_csv (harness.py line 591), every row gets
-        len(self._governance_violations) — the global total, not per-pipeline.
-        This means a CSV with 10 pipelines where only 1 had a violation will
-        show the violation count on ALL rows. This is misleading but may be
-        intentional (aggregate metric per experiment, not per pipeline).
-        """
+        """Aggregate governance_violations counts all violations globally."""
         broker = StubBroker()
 
         # Pipeline A
@@ -586,6 +566,53 @@ class TestGovernanceViolationsCounter:
         agg = await broker._metrics.compute_aggregate()
         # The violation from pipe-a is counted globally
         assert agg.governance_violations == 1
+
+    @pytest.mark.asyncio
+    async def test_csv_governance_violations_are_per_pipeline(self):
+        """export_csv must write per-pipeline violation counts, not the global total.
+
+        If pipe-a has 1 violation and pipe-b has 0, the CSV row for pipe-b
+        must show 0, not 1.
+        """
+        import csv
+        import tempfile
+
+        broker = StubBroker()
+
+        # Pipeline A: one violation
+        dag_a = _single_stage_dag()
+        ps_a = PipelineState(
+            pipeline_id="pipe-a", pipeline_type="test", dag=dag_a,
+            placement={"s0": "worker-0"},
+        )
+        broker._active_pipelines["pipe-a"] = ps_a
+        broker._metrics.record_governance_violation("pipe-a", "s0", "slice mismatch")
+        await broker._handle_result(_make_result(pipeline_id="pipe-a", stage_id="s0"))
+
+        # Pipeline B: no violations
+        dag_b = _single_stage_dag()
+        ps_b = PipelineState(
+            pipeline_id="pipe-b", pipeline_type="test", dag=dag_b,
+            placement={"s0": "worker-0"},
+        )
+        broker._active_pipelines["pipe-b"] = ps_b
+        await broker._handle_result(_make_result(pipeline_id="pipe-b", stage_id="s0"))
+
+        # Export CSV and read back
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            csv_path = f.name
+        await broker._metrics.export_csv(csv_path)
+
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = {row["pipeline_id"]: row for row in reader}
+
+        assert int(rows["pipe-a"]["governance_violations"]) == 1, (
+            f"pipe-a should have 1 violation, got {rows['pipe-a']['governance_violations']}"
+        )
+        assert int(rows["pipe-b"]["governance_violations"]) == 0, (
+            f"pipe-b should have 0 violations, got {rows['pipe-b']['governance_violations']}"
+        )
 
 
 # ===================================================================

@@ -574,6 +574,12 @@ class MetricsCollector:
             else 0
         )
 
+        # Pre-compute per-pipeline violation counts
+        violations_by_pipeline: dict[str, int] = {}
+        for v in self._governance_violations:
+            pid = v["pipeline_id"]
+            violations_by_pipeline[pid] = violations_by_pipeline.get(pid, 0) + 1
+
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -588,7 +594,7 @@ class MetricsCollector:
                     "e2e_latency_ms": t.end_to_end_latency_ms() or "",
                     "throughput_pps": f"{agg.throughput_per_sec:.4f}",
                     "completion_rate": f"{completion_rate:.4f}",
-                    "governance_violations": len(self._governance_violations),
+                    "governance_violations": violations_by_pipeline.get(t.pipeline_id, 0),
                     "federation_bytes_sent": fed_bytes,
                     "routing_accuracy_f1": (
                         f"{agg.routing_accuracy_f1:.4f}"

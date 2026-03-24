@@ -51,6 +51,7 @@ class SummaryPropagator:
         self.interval_seconds = interval_seconds
         self.timeout_seconds = timeout_seconds
         self.max_peer_failures = max_peer_failures
+        self.recovery_probe_interval: int = 5  # probe unhealthy peers every N rounds
 
         # Latest summary from each peer, keyed by domain_id
         self._peer_summaries: dict[str, SubscriptionSummary] = {}
@@ -63,6 +64,7 @@ class SummaryPropagator:
         # Peer health tracking: consecutive push failures and health status
         self._peer_failures: dict[str, int] = {}   # peer_url -> consecutive failure count
         self._peer_healthy: dict[str, bool] = {}    # peer_url -> is_healthy
+        self._peer_skip_counter: dict[str, int] = {}  # peer_url -> rounds skipped since unhealthy
 
         # Propagation latency tracking (ms per push round)
         self._propagation_latencies: list[float] = []
@@ -106,35 +108,84 @@ class SummaryPropagator:
     # ------------------------------------------------------------------
 
     async def push_summary(self, summary: SubscriptionSummary) -> None:
-        """Push a local summary to all federation peers.
+        """Push a local summary to healthy federation peers.
 
-        Sends the serialised summary via HTTP POST to each peer's
-        ``/federation/summary`` endpoint. Failures are logged but do not
-        interrupt propagation to other peers.
+        Sends the serialised summary via HTTP POST to each healthy peer's
+        ``/federation/summary`` endpoint. Unhealthy peers are skipped but
+        receive periodic recovery probes (every ``recovery_probe_interval``
+        rounds) to detect when they come back online.
+
+        Failures are logged but do not interrupt propagation to other peers.
 
         Args:
             summary: The local domain's current subscription summary.
         """
         t_start = time.time()
         data = serialize(summary)
+        eligible_peers = self._select_eligible_peers()
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             tasks = [
                 self._send_to_peer(client, peer_url, data)
-                for peer_url in self.peers
+                for peer_url in eligible_peers
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
         t_end = time.time()
         self._propagation_latencies.append((t_end - t_start) * 1000.0)
 
+    def _select_eligible_peers(self) -> list[str]:
+        """Return peers eligible for this push round.
+
+        Healthy peers are always included. Unhealthy peers are included
+        only on recovery probe rounds (every ``recovery_probe_interval``
+        skipped rounds).
+        """
+        eligible: list[str] = []
+        for peer_url in self.peers:
+            if self.is_peer_healthy(peer_url):
+                eligible.append(peer_url)
+            else:
+                # Increment skip counter; probe when it reaches the interval
+                count = self._peer_skip_counter.get(peer_url, 0) + 1
+                if count >= self.recovery_probe_interval:
+                    eligible.append(peer_url)
+                    self._peer_skip_counter[peer_url] = 0
+                    logger.debug(
+                        "Recovery probe for unhealthy peer %s", peer_url
+                    )
+                else:
+                    self._peer_skip_counter[peer_url] = count
+        return eligible
+
     async def receive_summary(self, summary: SubscriptionSummary) -> None:
         """Process an incoming summary from a federation peer.
 
         Stores the summary in the peer cache, replacing any previous
-        summary from the same domain.
+        summary from the same domain. Enforces timestamp-based freshness
+        checks (Section 4.2.5): a summary is only accepted if its
+        timestamp >= the stored timestamp. Summaries with timestamp == 0.0
+        are treated as legacy (no freshness data) and always accepted.
 
         Args:
             summary: A subscription summary received from a peer.
         """
+        existing = self._peer_summaries.get(summary.domain_id)
+        if existing is not None:
+            # Freshness check: reject strictly older summaries.
+            # timestamp == 0.0 means legacy/missing -- accept unconditionally.
+            if (
+                summary.timestamp != 0.0
+                and existing.timestamp != 0.0
+                and summary.timestamp < existing.timestamp
+            ):
+                logger.debug(
+                    "Rejected stale summary from domain %s "
+                    "(incoming ts=%.1f < stored ts=%.1f)",
+                    summary.domain_id,
+                    summary.timestamp,
+                    existing.timestamp,
+                )
+                return
+
         self._peer_summaries[summary.domain_id] = summary
         logger.debug(
             "Received summary from domain %s (%d clusters, ts=%.1f)",
@@ -217,8 +268,9 @@ class SummaryPropagator:
                 )
                 self._record_peer_failure(peer_url)
             else:
-                # Success: reset failure count and mark healthy
+                # Success: reset failure count, skip counter, and mark healthy
                 self._peer_failures.pop(peer_url, None)
+                self._peer_skip_counter.pop(peer_url, None)
                 if not self._peer_healthy.get(peer_url, True):
                     logger.info("Peer %s recovered; marking healthy.", peer_url)
                 self._peer_healthy[peer_url] = True

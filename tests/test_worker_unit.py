@@ -737,90 +737,139 @@ class TestExecuteEndpoint:
 # ===================================================================
 
 
-class TestBugDocumentation:
-    """Tests that document discovered bugs. These tests PASS to characterize
-    current (potentially incorrect) behavior."""
+class TestBugFixes:
+    """Tests for the three Worker bugs. Written RED-first per TDD skill."""
+
+    # --- Bug 1: register() before run() should raise RuntimeError ---
 
     @pytest.mark.asyncio
-    async def test_BUG_register_before_run_raises_assertion_not_descriptive_error(self):
-        """BUG: Calling register() before run() raises bare AssertionError.
-
-        worker.py line 238: ``assert self._http_client is not None``
-        This produces an unhelpful AssertionError instead of a descriptive
-        RuntimeError like "Worker not started; call run() first."
-
-        Impact: Confusing error message if a user of the Worker class calls
-        register() without first calling run() (which initializes _http_client).
-        """
+    async def test_register_before_run_raises_runtime_error(self):
+        """register() without run() must raise RuntimeError, not AssertionError."""
         cfg = _default_config()
         worker = Worker(cfg)
         # _http_client is None because run() was never called
 
-        with pytest.raises(AssertionError, match="HTTP client not initialised"):
+        with pytest.raises(RuntimeError, match="Worker not started"):
             await worker.register()
 
     @pytest.mark.asyncio
-    async def test_BUG_load_tracking_not_atomic_under_concurrency(self):
-        """BUG: _current_load updates are not protected by a lock.
+    async def test_register_before_run_does_not_raise_assertion_error(self):
+        """Bare AssertionError must not escape from register()."""
+        cfg = _default_config()
+        worker = Worker(cfg)
 
-        In execute_stage(), _current_load is updated with plain arithmetic:
-            self._current_load = min(self._current_load + demand, capacity)
-            ...
-            self._current_load = max(self._current_load - demand, 0.0)
+        with pytest.raises(RuntimeError):
+            await worker.register()
+        # If it raised AssertionError, the above would fail
 
-        Under concurrent execution, interleaving of add/subtract across
-        coroutines can cause load to drift (though in single-threaded asyncio
-        the window is small since the add and the await are separated).
+    # --- Bug 2: load tracking must use asyncio.Lock ---
 
-        This test documents the design: load tracking is best-effort, not exact.
-        In the current single-threaded asyncio model, the practical impact is low
-        because the add happens before the await and the subtract happens after.
-        However, if the worker were ever moved to a multi-threaded executor, this
-        would become a real race condition.
-        """
+    @pytest.mark.asyncio
+    async def test_worker_has_load_lock(self):
+        """Worker must have an asyncio.Lock for _current_load protection."""
+        cfg = _default_config()
+        worker = Worker(cfg)
+        assert hasattr(worker, "_load_lock")
+        assert isinstance(worker._load_lock, asyncio.Lock)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_load_returns_to_zero_with_lock(self):
+        """After many concurrent stages, load must be exactly 0.0 (lock-protected)."""
         cfg = _default_config(processing_speed=0.001, capacity=10.0)
         transport = FakeBrokerTransport()
         worker = Worker(cfg)
         worker._http_client = httpx.AsyncClient(transport=transport)
 
-        # Launch many concurrent stages
         assignments = [
             _make_assignment(computational_demand=0.1, pipeline_id=f"p{i}", stage_id=f"s{i}")
             for i in range(20)
         ]
         await asyncio.gather(*(worker.execute_stage(a) for a in assignments))
 
-        # After all complete, load should be exactly 0.0
-        # This PASSES in single-threaded asyncio but documents the concern
         assert worker._current_load == pytest.approx(0.0, abs=1e-9)
 
+    # --- Bug 3: _report_result must retry once and log WARNING ---
+
     @pytest.mark.asyncio
-    async def test_BUG_report_result_silently_swallows_all_errors(self):
-        """BUG (design concern, per L39): _report_result swallows ALL exceptions.
-
-        worker.py lines 372-377: the except clause catches Exception and only logs
-        a warning. Per L39, injection/reporting functions should raise, not
-        log-and-continue, because a silently failed result report means the broker
-        never learns the stage completed. The pipeline may stall or time out
-        waiting for a result that was already computed but never delivered.
-
-        This is a deliberate design choice (docstring says "Errors are logged but
-        not re-raised so that a network failure does not mask the execution
-        outcome"), but it conflicts with L39's principle. Whether this is a bug
-        depends on whether result reporting is considered an "injection function"
-        or merely best-effort telemetry.
-        """
+    async def test_report_result_retries_once_on_failure(self):
+        """_report_result must attempt the POST twice before giving up."""
         transport = FakeBrokerTransport(result_status=500)
         cfg = _default_config()
         worker = Worker(cfg)
         worker._http_client = httpx.AsyncClient(transport=transport)
 
-        assignment = _make_assignment()
-        # This should NOT raise (current behavior)
+        assignment = _make_assignment(pipeline_id="p-retry", stage_id="s-retry")
         result = await worker.execute_stage(assignment)
 
-        # The stage "succeeded" but the broker was never informed
+        # Worker must not raise (continues serving)
         assert result.success is True
-        # Verify that the /result request was attempted and got 500
+
+        # Two /result attempts (original + 1 retry)
         result_reqs = [(m, u, b) for m, u, b in transport.requests if "/result" in u]
-        assert len(result_reqs) == 1
+        assert len(result_reqs) == 2
+
+    @pytest.mark.asyncio
+    async def test_report_result_logs_warning_with_ids_on_failure(self):
+        """On report failure after retry, a WARNING must include pipeline_id and stage_id."""
+        transport = FakeBrokerTransport(result_status=500)
+        cfg = _default_config()
+        worker = Worker(cfg)
+        worker._http_client = httpx.AsyncClient(transport=transport)
+
+        assignment = _make_assignment(pipeline_id="p-warn", stage_id="s-warn")
+
+        with patch("src.worker.worker.logger") as mock_logger:
+            await worker.execute_stage(assignment)
+
+            # Find the WARNING call that includes both IDs
+            warning_calls = [
+                call for call in mock_logger.warning.call_args_list
+                if "p-warn" in str(call) and "s-warn" in str(call)
+            ]
+            assert len(warning_calls) >= 1, (
+                f"Expected WARNING with pipeline_id='p-warn' and stage_id='s-warn', "
+                f"got: {mock_logger.warning.call_args_list}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_report_result_succeeds_on_retry(self):
+        """If the first attempt fails but the retry succeeds, only one retry happens."""
+        # Custom transport: first /result returns 500, second returns 200
+        call_count = 0
+        original_transport = FakeBrokerTransport()
+
+        class RetryOnceTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                nonlocal call_count
+                url_str = str(request.url)
+                if "/result" in url_str and request.method == "POST":
+                    call_count += 1
+                    if call_count == 1:
+                        return httpx.Response(500, json={"error": "temporary"})
+                    return httpx.Response(200, json={"status": "ok"})
+                return await original_transport.handle_async_request(request)
+
+        cfg = _default_config()
+        worker = Worker(cfg)
+        worker._http_client = httpx.AsyncClient(transport=RetryOnceTransport())
+
+        assignment = _make_assignment()
+        result = await worker.execute_stage(assignment)
+
+        assert result.success is True
+        assert call_count == 2  # first failed, retry succeeded
+
+    @pytest.mark.asyncio
+    async def test_report_result_does_not_raise_on_double_failure(self):
+        """If both attempts fail, worker must not raise (continues serving)."""
+        transport = FakeBrokerTransport(
+            should_raise=httpx.ConnectError("broker gone")
+        )
+        cfg = _default_config()
+        worker = Worker(cfg)
+        worker._http_client = httpx.AsyncClient(transport=transport)
+
+        assignment = _make_assignment()
+        # Must not raise
+        result = await worker.execute_stage(assignment)
+        assert result.success is True
