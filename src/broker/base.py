@@ -268,6 +268,8 @@ class BaseBroker(abc.ABC):
         for stage_id in dag.stages:
             if stage_id in ps.completed_stages:
                 continue
+            if stage_id in ps.dispatched_stages:
+                continue
             if stage_id in ps.skipped_stages:
                 continue
 
@@ -368,6 +370,9 @@ class BaseBroker(abc.ABC):
 
         if not ready:
             return
+
+        async with self._pipelines_lock:
+            ps.dispatched_stages.update(ready)
 
         tasks = [self._dispatch_stage(ps, sid) for sid in ready]
         await asyncio.gather(*tasks)

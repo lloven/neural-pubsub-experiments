@@ -447,13 +447,10 @@ class TestCSVGovernanceViolations:
             "governance_violations should count actual recorded violations."
         )
 
-    def test_governance_violations_is_global_not_per_pipeline(self, tmp_path: Path) -> None:
-        """governance_violations is a GLOBAL count repeated on every row.
+    def test_governance_violations_is_per_pipeline(self, tmp_path: Path) -> None:
+        """governance_violations in CSV must be per-pipeline, not global.
 
-        This documents the current behavior: each CSV row gets the total
-        count from len(self._governance_violations), not a per-pipeline count.
-        This means every row has the same value, which is a design choice
-        (not a bug) but should be documented clearly.
+        If p0 has 1 violation and p1 has 0, the CSV row for p1 must show 0.
         """
         csv_path = str(tmp_path / "metrics.csv")
 
@@ -475,14 +472,10 @@ class TestCSVGovernanceViolations:
         asyncio.run(_run())
 
         _, rows = _read_csv(csv_path)
-        # Both rows should have the SAME governance_violations value
-        # because it's a global counter (len(self._governance_violations))
         v0 = int(rows[0]["governance_violations"])
         v1 = int(rows[1]["governance_violations"])
-        assert v0 == v1 == 1, (
-            f"governance_violations should be global (same on all rows): "
-            f"p0={v0}, p1={v1}. Expected both to be 1."
-        )
+        assert v0 == 1, f"p0 should have 1 violation, got {v0}"
+        assert v1 == 0, f"p1 should have 0 violations, got {v1}"
 
 
 # ---------------------------------------------------------------------------

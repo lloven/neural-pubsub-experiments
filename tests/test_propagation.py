@@ -329,8 +329,9 @@ class TestPushSummary:
 
     @pytest.mark.asyncio
     async def test_push_recovers_unhealthy_peer_on_success(self):
-        """An unhealthy peer that responds 200 must be marked healthy again."""
+        """An unhealthy peer that responds 200 on a recovery probe must be marked healthy."""
         p = _make_propagator(peers=["http://a:8000"], max_failures=2)
+        p.recovery_probe_interval = 1  # probe on the very next round
         peer = "http://a:8000"
 
         # Make peer unhealthy
@@ -348,6 +349,7 @@ class TestPushSummary:
             client_instance.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = client_instance
 
+            # First push triggers recovery probe (interval=1), peer responds 200
             await p.push_summary(_make_summary("domain-A"))
 
         assert p.is_peer_healthy(peer) is True
@@ -518,14 +520,11 @@ class TestEdgeCases:
         assert p._peer_failures.get("http://b:8000", 0) == 1
 
     @pytest.mark.asyncio
-    async def test_receive_stale_summary_overwrites_newer(self):
-        """BUG DOCUMENTATION: receive_summary does NOT check timestamps.
-        A stale summary (lower timestamp) will overwrite a newer one.
+    async def test_receive_stale_summary_rejected(self):
+        """Stale summary (lower timestamp) must NOT overwrite a newer one.
 
-        This is a potential bug: if summaries arrive out of order due to
-        network delays, the propagator will use stale data. The paper
-        (Section 4.2.5) mentions freshness checks but the implementation
-        does not enforce them.
+        Paper Section 4.2.5 requires freshness checks: only accept if
+        incoming timestamp > stored timestamp.
         """
         p = _make_propagator()
         newer = _make_summary("domain-B", timestamp=2000.0)
@@ -534,13 +533,50 @@ class TestEdgeCases:
         await p.receive_summary(newer)
         assert p.get_peer_summaries()["domain-B"].timestamp == 2000.0
 
-        # Stale summary arrives after newer one
+        # Stale summary arrives after newer one -- must be rejected
         await p.receive_summary(stale)
-        # BUG: stale summary overwrites newer one because there's no timestamp check
-        assert p.get_peer_summaries()["domain-B"].timestamp == 1000.0, (
-            "Expected stale overwrite (current behaviour). "
-            "If this fails, the bug has been fixed -- remove this test."
+        assert p.get_peer_summaries()["domain-B"].timestamp == 2000.0, (
+            "Stale summary must not overwrite a newer one"
         )
+
+    @pytest.mark.asyncio
+    async def test_receive_equal_timestamp_accepted(self):
+        """A summary with the same timestamp should be accepted (idempotent update)."""
+        p = _make_propagator()
+        first = _make_summary("domain-B", n_clusters=1, timestamp=1000.0)
+        second = _make_summary("domain-B", n_clusters=2, timestamp=1000.0)
+
+        await p.receive_summary(first)
+        await p.receive_summary(second)
+
+        # Equal timestamp: accept the update (last-writer-wins for same ts)
+        assert len(p.get_peer_summaries()["domain-B"].clusters) == 2
+
+    @pytest.mark.asyncio
+    async def test_receive_summary_without_timestamp_accepted(self):
+        """Backward compat: a summary with timestamp=0.0 (missing) is always accepted.
+
+        Legacy peers may not include a meaningful timestamp. When the stored
+        summary has timestamp=0.0 or the incoming one does, accept unconditionally.
+        """
+        p = _make_propagator()
+        # First: store a summary with a real timestamp
+        real = _make_summary("domain-B", timestamp=5000.0)
+        await p.receive_summary(real)
+        assert p.get_peer_summaries()["domain-B"].timestamp == 5000.0
+
+        # Incoming with timestamp=0.0 (legacy): should still be accepted
+        legacy = _make_summary("domain-B", timestamp=0.0)
+        await p.receive_summary(legacy)
+        assert p.get_peer_summaries()["domain-B"].timestamp == 0.0
+
+    @pytest.mark.asyncio
+    async def test_receive_summary_into_empty_cache_always_accepted(self):
+        """First summary from a peer is always accepted regardless of timestamp."""
+        p = _make_propagator()
+        summary = _make_summary("domain-B", timestamp=1.0)
+        await p.receive_summary(summary)
+        assert p.get_peer_summaries()["domain-B"].timestamp == 1.0
 
     @pytest.mark.asyncio
     async def test_receive_duplicate_summary_is_idempotent(self):
@@ -687,17 +723,64 @@ class TestErrorHandling:
         assert p.is_peer_healthy("http://a:8000") is False
 
     @pytest.mark.asyncio
-    async def test_unhealthy_peer_still_receives_push_attempts(self):
-        """BUG DOCUMENTATION: Unhealthy peers are still contacted on every push.
+    async def test_unhealthy_peer_skipped_in_push(self):
+        """Unhealthy peers must be skipped during push_summary().
 
-        The propagator does NOT skip unhealthy peers in push_summary().
-        It always sends to all peers in self.peers regardless of health status.
-        This means bandwidth is wasted on peers known to be down.
-
-        Whether this is intentional (to detect recovery) or a bug is unclear.
-        The paper does not specify the expected behaviour for unhealthy peers.
+        Once a peer is marked unhealthy (max_peer_failures consecutive
+        failures), push_summary() should not contact it on every round.
         """
-        p = _make_propagator(peers=["http://a:8000"], max_failures=2)
+        p = _make_propagator(
+            peers=["http://unhealthy:8000", "http://healthy:8000"],
+            max_failures=2,
+        )
+        summary = _make_summary("domain-A")
+
+        posted_urls: list[str] = []
+
+        async def mock_post(url, *, content, headers):
+            posted_urls.append(url)
+            if "unhealthy" in url:
+                return httpx.Response(503, request=httpx.Request("POST", url))
+            return httpx.Response(200, request=httpx.Request("POST", url))
+
+        with patch("src.federation.propagation.httpx.AsyncClient") as MockClient:
+            client_instance = AsyncMock()
+            client_instance.post = mock_post
+            client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+            client_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = client_instance
+
+            # 2 pushes to make the unhealthy peer actually unhealthy
+            await p.push_summary(summary)
+            await p.push_summary(summary)
+            assert p.is_peer_healthy("http://unhealthy:8000") is False
+            assert p.is_peer_healthy("http://healthy:8000") is True
+
+            # Clear tracking for the next push
+            posted_urls.clear()
+
+            # Third push: unhealthy peer should be skipped
+            await p.push_summary(summary)
+
+        contacted = [u for u in posted_urls]
+        assert "http://healthy:8000/federation/summary" in contacted
+        assert "http://unhealthy:8000/federation/summary" not in contacted, (
+            "Unhealthy peer should be skipped in push_summary()"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unhealthy_peer_recovery_probe(self):
+        """Unhealthy peers should receive periodic recovery probes.
+
+        After being marked unhealthy, the peer should be probed at a reduced
+        frequency (e.g., every N rounds) to detect recovery.
+        """
+        probe_interval = 3  # probe every 3rd round
+        p = _make_propagator(
+            peers=["http://a:8000"],
+            max_failures=2,
+        )
+        p.recovery_probe_interval = probe_interval
         summary = _make_summary("domain-A")
 
         call_count = 0
@@ -714,17 +797,19 @@ class TestErrorHandling:
             client_instance.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = client_instance
 
-            # First 2 pushes: make peer unhealthy
+            # 2 pushes to make peer unhealthy
             await p.push_summary(summary)
             await p.push_summary(summary)
             assert p.is_peer_healthy("http://a:8000") is False
+            call_count = 0
 
-            # Third push: peer is unhealthy but still contacted
-            await p.push_summary(summary)
+            # Next probe_interval pushes: should probe on the last one
+            for _ in range(probe_interval):
+                await p.push_summary(summary)
 
-        assert call_count == 3, (
-            "Unhealthy peer was still contacted (current behaviour). "
-            "If this fails, behaviour has changed."
+        # Exactly 1 probe in probe_interval rounds
+        assert call_count == 1, (
+            f"Expected 1 recovery probe in {probe_interval} rounds, got {call_count}"
         )
 
     @pytest.mark.asyncio

@@ -117,6 +117,7 @@ class PipelineState:
     dag: PipelineDAG
     placement: dict[str, str]
     completed_stages: set[str] = field(default_factory=set)
+    dispatched_stages: set[str] = field(default_factory=set)
     failed: bool = False
     error: Optional[str] = None
     all_stages: set[str] = field(default_factory=set, init=False, repr=False)

@@ -161,6 +161,7 @@ class Worker:
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
         self._current_load: float = 0.0
+        self._load_lock = asyncio.Lock()
         self._registered: bool = False
         self._shutdown_event = asyncio.Event()
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -235,7 +236,8 @@ class Worker:
             "slice_id": self.config.slice_id,
             "capacity": self.config.capacity,
         }
-        assert self._http_client is not None, "HTTP client not initialised; call run() first."
+        if self._http_client is None:
+            raise RuntimeError("Worker not started; call run() first.")
         response = await self._http_client.post(
             f"{self.config.broker_url}/register",
             json=payload,
@@ -297,11 +299,12 @@ class Worker:
         """
         sleep_s = assignment.computational_demand * self.config.processing_speed
 
-        # Track load
-        self._current_load = min(
-            self._current_load + assignment.computational_demand,
-            self.config.capacity,
-        )
+        # Track load (lock protects against concurrent coroutine interleaving)
+        async with self._load_lock:
+            self._current_load = min(
+                self._current_load + assignment.computational_demand,
+                self.config.capacity,
+            )
 
         start_time = time.time()
         error: Optional[str] = None
@@ -323,9 +326,10 @@ class Worker:
                 "Stage '%s' execution failed: %s", assignment.stage_id, exc
             )
         finally:
-            self._current_load = max(
-                self._current_load - assignment.computational_demand, 0.0
-            )
+            async with self._load_lock:
+                self._current_load = max(
+                    self._current_load - assignment.computational_demand, 0.0
+                )
 
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000.0
@@ -348,8 +352,10 @@ class Worker:
     async def _report_result(self, result: StageResult) -> None:
         """POST the stage result back to the broker.
 
-        Sends to ``{broker_url}/result``. Errors are logged but not re-raised
-        so that a network failure does not mask the execution outcome.
+        Sends to ``{broker_url}/result``. On failure, retries once after a 1 s
+        delay. If both attempts fail, logs a WARNING with pipeline_id, stage_id,
+        and the error (L39 compliance). Does not re-raise so the worker
+        continues serving other requests.
         """
         payload = {
             "pipeline_id": result.pipeline_id,
@@ -361,20 +367,38 @@ class Worker:
             "success": result.success,
             "error": result.error,
         }
-        try:
-            if self._http_client is not None:
+        if self._http_client is None:
+            logger.warning(
+                "Cannot report result for pipeline '%s' stage '%s': "
+                "no HTTP client available.",
+                result.pipeline_id,
+                result.stage_id,
+            )
+            return
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            try:
                 response = await self._http_client.post(
                     f"{self.config.broker_url}/result",
                     json=payload,
                     timeout=5.0,
                 )
                 response.raise_for_status()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to report result for stage '%s': %s",
-                result.stage_id,
-                exc,
-            )
+                return  # success
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
+
+        # Both attempts failed
+        logger.warning(
+            "Failed to report result for pipeline '%s' stage '%s' "
+            "after 2 attempts: %s",
+            result.pipeline_id,
+            result.stage_id,
+            last_exc,
+        )
 
     # ------------------------------------------------------------------
     # Server lifecycle
