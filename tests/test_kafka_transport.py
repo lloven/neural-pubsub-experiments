@@ -279,18 +279,23 @@ class TestDualTransportBaseBroker:
         assert message["stage_id"] == "s1"
 
 
-class TestStaticBrokerNoDispatchOverride:
-    """StaticBroker must NOT override _dispatch_stage (inherits from BaseBroker)."""
+class TestStaticBrokerDispatchRecovery:
+    """StaticBroker overrides _dispatch_stage for dispatch-time recovery (fairness fix).
 
-    def test_static_broker_uses_base_dispatch(self):
-        """StaticBroker._dispatch_stage should be inherited, not overridden."""
+    After the H6 fairness fix, StaticBroker provides the same dispatch-time
+    recovery as NeuralBroker (evict dead worker, re-place on survivor).
+    The override is intentional so that S1/S2/S3 differ ONLY in placement.
+    """
+
+    def test_static_broker_overrides_dispatch_for_recovery(self):
+        """StaticBroker._dispatch_stage must be overridden (dispatch-time recovery)."""
         from src.broker.static_broker import StaticBroker
         from src.broker.base import BaseBroker
 
-        # If StaticBroker defines its own _dispatch_stage, it shadows BaseBroker's.
-        # After refactoring, it should NOT define one.
-        assert StaticBroker._dispatch_stage is BaseBroker._dispatch_stage, (
-            "StaticBroker should inherit _dispatch_stage from BaseBroker, not override it."
+        # StaticBroker now intentionally overrides _dispatch_stage to add
+        # the same dispatch-time recovery as NeuralBroker.
+        assert StaticBroker._dispatch_stage is not BaseBroker._dispatch_stage, (
+            "StaticBroker should override _dispatch_stage for dispatch-time recovery."
         )
 
 
