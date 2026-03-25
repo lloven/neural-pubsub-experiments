@@ -11,6 +11,8 @@ Usage:
     python scripts/monitor.py                          # monitor results/phase_a
     python scripts/monitor.py results/phase_b          # monitor specific phase
     python scripts/monitor.py --interval 2             # refresh every 2s
+    python scripts/monitor.py --all                    # monitor all phases
+    python scripts/monitor.py --all --remote HOST      # all phases on remote
 """
 
 from __future__ import annotations
@@ -25,7 +27,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Ensure the project root is on sys.path so that ``from scripts._common``
+# works regardless of invocation method (``python scripts/monitor.py``,
+# ``python -m scripts.monitor``, or ``PYTHONPATH=. python scripts/monitor.py``).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Directories to skip when discovering phase subdirectories in results/.
+_SKIP_DIRS = {"analysis", "local", "test_cleanup", "test_signal"}
 
 
 def format_time(seconds: float) -> str:
@@ -425,43 +435,239 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
     sys.stdout.flush()
 
 
-def main():
+# ---------------------------------------------------------------------------
+# Multi-directory (--all) helpers
+# ---------------------------------------------------------------------------
+
+
+def discover_phases(results_root: Path) -> list[str]:
+    """Return sorted list of phase directory names under *results_root*.
+
+    Skips hidden directories (starting with ``_``), ``analysis``, and other
+    non-phase directories defined in ``_SKIP_DIRS``.
+    """
+    if not results_root.is_dir():
+        return []
+    phases = []
+    for entry in sorted(results_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith("_") or entry.name.startswith("."):
+            continue
+        if entry.name in _SKIP_DIRS:
+            continue
+        phases.append(entry.name)
+    return phases
+
+
+def phase_summary(
+    phase_dir: Path, remote_host: str | None = None,
+) -> dict:
+    """Compute a summary dict for a single phase directory.
+
+    Returns a dict with keys: phase, total, done, running, failed, queued,
+    and progress (the raw progress dict).
+    """
+    phase_name = phase_dir.name
+    progress = load_progress(phase_dir, remote_host=remote_host)
+    if not progress:
+        progress = _discover_progress_from_csvs(phase_dir, remote_host=remote_host)
+
+    n_done = sum(1 for v in progress.values() if v.get("status") == "done")
+    n_running = sum(1 for v in progress.values() if v.get("status") == "running")
+    n_failed = sum(1 for v in progress.values() if v.get("status") == "failed")
+    n_queued = sum(1 for v in progress.values() if v.get("status") == "queued")
+
+    return {
+        "phase": phase_name,
+        "total": len(progress),
+        "done": n_done,
+        "running": n_running,
+        "failed": n_failed,
+        "queued": n_queued,
+        "progress": progress,
+    }
+
+
+def render_all_phases(
+    summaries: list[dict],
+    results_root: Path,
+    remote_host: str | None = None,
+) -> None:
+    """Render a combined dashboard for all phases.
+
+    Shows a per-phase summary table, then detailed info for any phase
+    that has running experiments.
+    """
+    host_label = f"    Host: {remote_host}" if remote_host else ""
+
+    # Clear screen
+    sys.stdout.write("\033[2J\033[H")
+
+    print("=" * 72)
+    print("  Neural Pub/Sub Experiment Monitor (All Phases)")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{host_label}")
+    print("=" * 72)
+    print()
+
+    # Summary table
+    header = f"  {'Phase':<20} {'Total':>6} {'Done':>6} {'Running':>8} {'Failed':>7}"
+    print(header)
+    print("  " + "\u2500" * 49)
+    for s in summaries:
+        print(
+            f"  {s['phase']:<20} {s['total']:>6} {s['done']:>6} "
+            f"{s['running']:>8} {s['failed']:>7}"
+        )
+    print()
+
+    # Detail for phases with running experiments
+    for s in summaries:
+        if s["running"] > 0:
+            running_runs = [
+                (rid, info) for rid, info in sorted(s["progress"].items())
+                if info.get("status") == "running"
+            ]
+            for run_id, info in running_runs:
+                ts = info.get("timestamp", "")
+                now = time.time()
+                try:
+                    start = datetime.fromisoformat(ts).timestamp()
+                    run_elapsed = now - start
+                except (ValueError, TypeError):
+                    run_elapsed = 0
+
+                from scripts._common import DEFAULT_RUN_DURATION_S
+                run_duration = DEFAULT_RUN_DURATION_S
+                pct = min(run_elapsed / run_duration, 1.0) if run_elapsed > 0 else 0.0
+                bar_len = 20
+                filled = int(bar_len * pct)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                eta_run = max(0, run_duration - run_elapsed)
+
+                print(f"  \U0001F504 Running: {s['phase']}/{run_id}")
+                print(
+                    f"      [{bar}] {pct * 100:4.1f}%  "
+                    f"{format_time(run_elapsed)}/{format_time(run_duration)}"
+                )
+            print()
+
+    # Grand totals
+    grand_total = sum(s["total"] for s in summaries)
+    grand_done = sum(s["done"] for s in summaries)
+    grand_running = sum(s["running"] for s in summaries)
+    grand_failed = sum(s["failed"] for s in summaries)
+    if grand_total > 0:
+        fraction = grand_done / grand_total
+        print(f"  Grand total: {progress_bar(fraction, 30)}  ({grand_done}/{grand_total} runs)")
+        if grand_failed:
+            print(f"  Failed: {grand_failed}")
+    else:
+        print("  No experiment results found yet.")
+
+    print()
+    print("=" * 72)
+    print("  Ctrl+C to stop monitoring (experiment continues in background)")
+    print()
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# Argument parser (extracted for testability)
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the argument parser for the monitor CLI."""
     parser = argparse.ArgumentParser(description="Monitor Neural Pub/Sub experiments")
-    parser.add_argument("results_dir", nargs="?", default="results/phase_a",
-                        help="Results directory to monitor (default: results/phase_a)")
-    parser.add_argument("--interval", type=int, default=5, help="Refresh interval in seconds")
-    parser.add_argument("--once", action="store_true",
-                        help="Print status once and exit (no refresh loop).")
-    parser.add_argument("--remote", metavar="HOST", default=None,
-                        help="Monitor experiments running on a remote SSH host.")
-    parser.add_argument("--remote-dir", metavar="DIR", default=None,
-                        help="Repo directory on the remote host (default: reads HOST_D1_DIR from .env.local).")
-    args = parser.parse_args()
+    parser.add_argument(
+        "results_dir", nargs="?", default="results/phase_a",
+        help="Results directory to monitor (default: results/phase_a)",
+    )
+    parser.add_argument(
+        "--all", dest="all_phases", action="store_true",
+        help="Monitor all experiment phases under results/.",
+    )
+    parser.add_argument(
+        "--interval", type=int, default=5,
+        help="Refresh interval in seconds",
+    )
+    parser.add_argument(
+        "--once", action="store_true",
+        help="Print status once and exit (no refresh loop).",
+    )
+    parser.add_argument(
+        "--remote", metavar="HOST", default=None,
+        help="Monitor experiments running on a remote SSH host.",
+    )
+    parser.add_argument(
+        "--remote-dir", metavar="DIR", default=None,
+        help="Repo directory on the remote host (default: reads HOST_D1_DIR from .env.local).",
+    )
+    return parser
 
-    remote_host = args.remote
-    remote_dir = args.remote_dir
 
+def _resolve_remote_dir(remote_host: str | None, remote_dir: str | None) -> str | None:
+    """Resolve the remote directory, reading from .env.local if needed."""
     if remote_host and not remote_dir:
-        # Try to read from .env.local
         env_local = PROJECT_ROOT / ".env.local"
         if env_local.exists():
             for line in env_local.read_text().splitlines():
                 line = line.strip()
                 if line.startswith("HOST_D1_DIR="):
-                    remote_dir = line.split("=", 1)[1].strip()
-                    break
+                    return line.split("=", 1)[1].strip()
+    return remote_dir
 
-    if remote_host:
-        # Prepend remote repo dir so SSH commands resolve relative paths
-        if remote_dir:
-            results_dir = Path(remote_dir) / args.results_dir
-        else:
-            results_dir = Path(args.results_dir)
-    else:
-        results_dir = PROJECT_ROOT / args.results_dir
 
+def main():
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    remote_host = args.remote
+    remote_dir = _resolve_remote_dir(remote_host, args.remote_dir)
     once_mode = args.once
 
+    # Resolve the results root (used by --all) and single results_dir
+    if remote_host:
+        if remote_dir:
+            results_root = Path(remote_dir) / "results"
+            results_dir = Path(remote_dir) / args.results_dir
+        else:
+            results_root = Path("results")
+            results_dir = Path(args.results_dir)
+    else:
+        results_root = PROJECT_ROOT / "results"
+        results_dir = PROJECT_ROOT / args.results_dir
+
+    # ── --all mode: monitor all phase directories ────────────────────
+    if args.all_phases:
+        try:
+            while True:
+                phases = discover_phases(results_root)
+                summaries = [
+                    phase_summary(results_root / p, remote_host=remote_host)
+                    for p in phases
+                ]
+                render_all_phases(summaries, results_root=results_root, remote_host=remote_host)
+
+                if once_mode:
+                    break
+
+                # Check if everything is finished
+                grand_total = sum(s["total"] for s in summaries)
+                grand_running = sum(s["running"] for s in summaries)
+                grand_queued = sum(s["queued"] for s in summaries)
+                if grand_total > 0 and grand_running == 0 and grand_queued == 0:
+                    print("  All experiments complete!")
+                    break
+
+                time.sleep(args.interval)
+
+        except KeyboardInterrupt:
+            print("\n  Monitor stopped. Experiments continue in background.")
+        return
+
+    # ── Single-directory mode (original behavior) ────────────────────
     if not remote_host and not once_mode:
         if not results_dir.exists():
             print(f"Results directory not found: {results_dir}")
@@ -473,7 +679,7 @@ def main():
         while True:
             progress = load_progress(results_dir, remote_host=remote_host)
             if not progress:
-                # No .progress.json — build progress from CSV files on disk
+                # No .progress.json -- build progress from CSV files on disk
                 progress = _discover_progress_from_csvs(results_dir, remote_host=remote_host)
 
             if progress:
