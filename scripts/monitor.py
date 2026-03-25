@@ -440,12 +440,35 @@ def render(results_dir: Path, progress: dict, remote_host: str | None = None):
 # ---------------------------------------------------------------------------
 
 
-def discover_phases(results_root: Path) -> list[str]:
+def discover_phases(
+    results_root: Path, remote_host: str | None = None,
+) -> list[str]:
     """Return sorted list of phase directory names under *results_root*.
 
     Skips hidden directories (starting with ``_``), ``analysis``, and other
     non-phase directories defined in ``_SKIP_DIRS``.
+
+    When *remote_host* is set, lists directories via SSH instead of local
+    filesystem (the local path may not exist for remote experiments).
     """
+    if remote_host:
+        try:
+            out = subprocess.check_output(
+                ["ssh", remote_host, f"ls -d {results_root}/*/"],
+                text=True, stderr=subprocess.DEVNULL, timeout=10,
+            )
+            phases = []
+            for line in out.strip().splitlines():
+                name = line.rstrip("/").rsplit("/", 1)[-1]
+                if name.startswith("_") or name.startswith("."):
+                    continue
+                if name in _SKIP_DIRS:
+                    continue
+                phases.append(name)
+            return sorted(phases)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return []
+
     if not results_root.is_dir():
         return []
     phases = []
@@ -643,7 +666,7 @@ def main():
     if args.all_phases:
         try:
             while True:
-                phases = discover_phases(results_root)
+                phases = discover_phases(results_root, remote_host=remote_host)
                 summaries = [
                     phase_summary(results_root / p, remote_host=remote_host)
                     for p in phases
