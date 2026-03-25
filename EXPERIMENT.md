@@ -458,16 +458,30 @@ All tests pass. No new failures.
 
 ### Step 2: Local dry-run
 ```bash
-python -m scripts.run_phase_X --configs CONFIG --seeds 99 --dry-run
+python -m scripts.run_PHASE --configs CONFIG --seeds 99 --dry-run
 ```
 Verify: correct run_id, correct timing, correct failure target, correct strategy. Verify run count matches `expected_run_count(phase)` from `scripts/experiment_matrix.py`.
 
-### Step 3: Local extended smoke (2.5 min)
+### Step 3: Local smoke (45s) and extended smoke (90s)
+
+**Quick smoke** (45s): confirms end-to-end pipeline, CSV output, no crashes.
 ```bash
-python -m scripts.run_phase_X --configs CONFIG --seeds 99 \
-    --warmup 30 --measurement 120 --failure-delay 60
+python -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 15 --measurement 30
 ```
-Verify: CSV produced, treatment effect visible (L38), no silent errors (L39).
+
+**Extended smoke** (90s): confirms treatment effect (L38), no silent errors (L39), enough pipelines for statistical sanity.
+```bash
+python -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 30 --measurement 60
+```
+
+For failure-injection phases (resilience, stress with `-fail`), use ext-smoke — the quick smoke may not leave enough time for failure + recovery.
+
+| Smoke type | Warmup | Measurement | Total | Use when |
+|---|---|---|---|---|
+| Quick | 15s | 30s | 45s | Verifying pipeline works, CSV schema, no crashes |
+| Extended | 30s | 60s | 90s | Verifying treatment effect (L38), failure recovery |
+
+Verify: CSV produced, ≥1 success=True row (L30), treatment effect visible (L38), no silent errors (L39).
 
 ### Step 4: Commit + push
 ```bash
@@ -481,13 +495,16 @@ ssh 5gtn-npubsub "cd ~/neural-pubsub && git fetch origin && git reset --hard ori
 
 ### Step 6: Remote dry-run
 ```bash
-ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_phase_X --configs CONFIG --seeds 99 --dry-run"
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_PHASE --configs CONFIG --seeds 99 --dry-run"
 ```
 
-### Step 7: Remote extended smoke (2.5 min)
+### Step 7: Remote smoke (45s) + extended smoke (90s)
 ```bash
-ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_phase_X --configs CONFIG --seeds 99 \
-    --warmup 30 --measurement 120 --failure-delay 60"
+# Quick smoke (45s) — pipeline works on target host
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 15 --measurement 30"
+
+# Extended smoke (90s) — treatment effect + no silent errors
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 30 --measurement 60"
 ```
 L38: Verify treatment effect. L39: Check for silent errors. Compare against local smoke.
 

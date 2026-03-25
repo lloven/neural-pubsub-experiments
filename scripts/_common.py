@@ -654,6 +654,15 @@ def phase_main(
     if extra_args_fn is not None:
         extra_args_fn(parser)
 
+    # Add --warmup/--measurement if the phase runner hasn't already registered them
+    _known_options = {s for a in parser._actions for s in a.option_strings}
+    if "--warmup" not in _known_options:
+        parser.add_argument("--warmup", type=int, default=None,
+                            help="Override warmup_s for all runs (smoke: 15)")
+    if "--measurement" not in _known_options:
+        parser.add_argument("--measurement", type=int, default=None,
+                            help="Override measurement_s for all runs (smoke: 30)")
+
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level))
 
@@ -675,6 +684,20 @@ def phase_main(
         extra_kw = parse_extra_fn(args)
 
     runs = build_matrix_fn(config_names, seeds, **extra_kw)
+
+    # Apply --warmup / --measurement overrides to all runs
+    if args.warmup is not None or args.measurement is not None:
+        for run in runs:
+            if args.warmup is not None and hasattr(run, "warmup_s"):
+                run.warmup_s = args.warmup
+            if args.measurement is not None and hasattr(run, "measurement_s"):
+                run.measurement_s = args.measurement
+            # For resilience: scale failure_delay proportionally
+            if args.warmup is not None and hasattr(run, "failure_delay_s"):
+                # Default: failure at warmup + 3min. For smoke: failure at warmup + 5s
+                total = (args.warmup or run.warmup_s) + (args.measurement if args.measurement is not None else run.measurement_s)
+                run.failure_delay_s = min(run.failure_delay_s, max(args.warmup + 5, total // 2))
+
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Load existing progress for checkpointing
