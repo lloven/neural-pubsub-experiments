@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 
 from src.broker.base import BaseBroker
 from src.broker.models import PipelineState, WorkerInfo
+from src.broker.placement import slice_matches
 from src.federation.propagation import SummaryPropagator
 from src.federation.summary import (
     ClusterSummary,
@@ -77,6 +78,10 @@ class StaticBroker(BaseBroker):
         if isinstance(placement, str):
             placement = PlacementStrategy(placement)
         self.placement = placement
+        # Per-slice round-robin cycles: maps slice_requirement (or None) to
+        # an itertools.cycle over eligible worker IDs.
+        self._slice_cycles: dict[str | None, itertools.cycle] = {}
+        # Legacy attribute kept for backward compat in case anything references it
         self._worker_cycle: itertools.cycle | None = None
 
         # Health monitoring (same mechanism as NeuralBroker)
@@ -101,26 +106,83 @@ class StaticBroker(BaseBroker):
         self._rebuild_cycle()
 
     def _rebuild_cycle(self) -> None:
-        """Rebuild the round-robin iterator from current workers."""
-        ids = sorted(self._workers.keys())
-        self._worker_cycle = itertools.cycle(ids) if ids else None
+        """Rebuild per-slice round-robin iterators from current workers.
+
+        Each unique slice_requirement gets its own cycle containing only
+        workers eligible for that slice (via slice_matches). The None key
+        covers stages with no slice requirement (all workers eligible).
+        """
+        # Collect all distinct slice requirements we might encounter.
+        # Always include None (no requirement) plus every worker's slice_id.
+        slice_keys: set[str | None] = {None}
+        for w in self._workers.values():
+            if w.slice_id != "flat":
+                slice_keys.add(w.slice_id)
+
+        self._slice_cycles = {}
+        for req in slice_keys:
+            eligible = sorted(
+                wid for wid, w in self._workers.items()
+                if slice_matches(w.slice_id, req)
+            )
+            if eligible:
+                self._slice_cycles[req] = itertools.cycle(eligible)
+
+        # Legacy global cycle for backward compat
+        all_ids = sorted(self._workers.keys())
+        self._worker_cycle = itertools.cycle(all_ids) if all_ids else None
 
     # ------------------------------------------------------------------
     # Placement
     # ------------------------------------------------------------------
 
-    def _pick_worker(self) -> str:
+    def _eligible_workers(self, slice_requirement: str | None) -> list[str]:
+        """Return sorted list of worker IDs eligible for the given slice."""
+        return sorted(
+            wid for wid, w in self._workers.items()
+            if slice_matches(w.slice_id, slice_requirement)
+        )
+
+    def _pick_worker(self, slice_requirement: str | None = None) -> str:
+        """Pick a worker for a stage with the given slice requirement.
+
+        For round-robin: uses per-slice cycles.
+        For random: picks uniformly from eligible workers.
+
+        Raises RuntimeError if no eligible workers exist for the slice.
+        """
         if not self._workers:
             raise RuntimeError("No workers registered.")
+
         if self.placement is PlacementStrategy.RANDOM:
-            return random.choice(list(self._workers.keys()))
-        if self._worker_cycle is None:
-            self._rebuild_cycle()
-        return next(self._worker_cycle)  # type: ignore[arg-type]
+            eligible = self._eligible_workers(slice_requirement)
+            if not eligible:
+                raise RuntimeError(
+                    f"No eligible workers for slice '{slice_requirement}'."
+                )
+            return random.choice(eligible)
+
+        # Round-robin: use per-slice cycle
+        cycle = self._slice_cycles.get(slice_requirement)
+        if cycle is None:
+            # Cycle not pre-built for this requirement; build on demand
+            eligible = self._eligible_workers(slice_requirement)
+            if not eligible:
+                raise RuntimeError(
+                    f"No eligible workers for slice '{slice_requirement}'."
+                )
+            cycle = itertools.cycle(eligible)
+            self._slice_cycles[slice_requirement] = cycle
+
+        return next(cycle)
 
     def _compute_placement(self, dag: PipelineDAG) -> dict[str, str]:
         order = dag.topological_sort()
-        return {stage_id: self._pick_worker() for stage_id in order}
+        placement: dict[str, str] = {}
+        for stage_id in order:
+            stage = dag.get_stage(stage_id)
+            placement[stage_id] = self._pick_worker(stage.slice_requirement)
+        return placement
 
     # ------------------------------------------------------------------
     # Health monitoring (same algorithm as NeuralBroker)
@@ -256,7 +318,10 @@ class StaticBroker(BaseBroker):
                     if self._workers:
                         try:
                             for sid in stages_to_replace:
-                                ps.placement[sid] = self._pick_worker()
+                                stage = ps.dag.get_stage(sid)
+                                ps.placement[sid] = self._pick_worker(
+                                    stage.slice_requirement
+                                )
                             replaced = True
                         except RuntimeError:
                             pass
@@ -365,10 +430,11 @@ class StaticBroker(BaseBroker):
 
         # Re-place using static placement (round-robin/random)
         re_placed = False
+        stage = ps.dag.get_stage(stage_id)
         async with self._workers_lock:
             if self._workers:
                 try:
-                    new_node = self._pick_worker()
+                    new_node = self._pick_worker(stage.slice_requirement)
                     ps.placement[stage_id] = new_node
                     re_placed = True
                 except RuntimeError:
