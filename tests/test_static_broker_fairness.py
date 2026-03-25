@@ -45,8 +45,15 @@ def _make_broker(
     )
 
 
-async def _register_workers(broker: StaticBroker, n: int, domain: str = "d1") -> list[str]:
-    """Register *n* workers and return their node_ids."""
+async def _register_workers(
+    broker: StaticBroker, n: int, domain: str = "d1", slice_id: str = "flat",
+) -> list[str]:
+    """Register *n* workers and return their node_ids.
+
+    Uses slice_id="flat" by default so workers accept any pipeline slice.
+    These tests focus on infrastructure fairness (health checks, dispatch
+    recovery, federation), not slice placement correctness.
+    """
     node_ids = []
     for i in range(n):
         nid = f"worker-{domain}-{i}"
@@ -54,7 +61,7 @@ async def _register_workers(broker: StaticBroker, n: int, domain: str = "d1") ->
             broker._workers[nid] = WorkerInfo(
                 node_id=nid,
                 domain_id=domain,
-                slice_id="eMBB",
+                slice_id=slice_id,
                 capacity=1.0,
                 url=f"http://localhost:{8081 + i}",
             )
