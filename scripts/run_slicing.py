@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Slicing: Slice-aware placement.
 
-Runs 6 configurations on a single site with multiple network slices:
+Runs 5 configurations on a single site with multiple network slices:
   flat     -- Neural Pub/Sub, 1 slice, 5 workers (equalized flat baseline)
   neural   -- Neural Pub/Sub, 3 slices, no governance (neural placement)
   rr       -- Neural Pub/Sub, 3 slices, no governance (round-robin placement)
@@ -32,12 +32,12 @@ from scripts._common import (
     COMPOSE_FLAT,
     COMPOSE_FLAT_EQ,
     COMPOSE_GOVERNANCE,
+    COMPOSE_KAFKA,
     DEFAULT_MEASUREMENT_S,
     DEFAULT_WARMUP_S,
     PROJECT_ROOT,
     inject_compose_kill,
     phase_main,
-    resolve_config,
     run_single,
 )
 
@@ -59,13 +59,16 @@ CONFIGS = {
     "gov-fail": {"num_slices": 3, "governance": True, "failure_injection": True},
 }
 
-# Mapping from new config names to _CONFIG_TABLE keys
-_CONFIG_KEY_MAP = {
-    "flat": "B1eq",
-    "neural": "B2",
-    "rr": "B2flat",
-    "gov": "B3",
-    "gov-fail": "B4",
+# Compose overlay and env overrides per config.
+# flat uses the equalized flat topology (1 slice, 5 workers).
+# rr uses the sliced topology but with round-robin placement (static broker).
+# gov/gov-fail add the governance overlay.
+_COMPOSE_MAP: dict[str, dict] = {
+    "flat":     {"overlays": [COMPOSE_FLAT_EQ], "env": {}},
+    "neural":   {"overlays": [],                "env": {}},
+    "rr":       {"overlays": [],                "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}},
+    "gov":      {"overlays": [COMPOSE_GOVERNANCE], "env": {}},
+    "gov-fail": {"overlays": [COMPOSE_GOVERNANCE], "env": {}},
 }
 
 
@@ -122,23 +125,23 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         total_duration,
     )
 
-    # Use resolve_config for compose files (handles transport overlay)
-    config_key = _CONFIG_KEY_MAP[run.config_name]
-    resolved = resolve_config(
-        config_key, rate=DEFAULT_RATE, stages=DEFAULT_COMPLEXITY,
-        seed=run.seed, transport=run.transport,
-    )
+    # Build compose files and env from _COMPOSE_MAP (self-contained, no resolve_config)
+    cmap = _COMPOSE_MAP[run.config_name]
+    compose_files = [COMPOSE_FILE] + list(cmap["overlays"])
+    if run.transport == "kafka":
+        compose_files.append(COMPOSE_KAFKA)
 
-    # Determine placement strategy: configs that specify a static broker
-    # (e.g., rr) use their own PLACEMENT env var; others default to neural.
-    placement = resolved.env.get("PLACEMENT", "neural")
+    # Determine placement strategy: rr overrides to static broker + round_robin;
+    # others default to the neural broker.
+    placement = cmap["env"].get("PLACEMENT", "neural")
 
     env = {
-        **resolved.env,
+        **cmap["env"],
         "PLACEMENT_STRATEGY": placement,
         "ARRIVAL_RATE": str(DEFAULT_RATE_VALUE),
         "DURATION_S": str(total_duration),
         "SEED": str(run.seed),
+        "PIPELINE_STAGES": str(DEFAULT_COMPLEXITY),
         "PIPELINE_MIX_CQI": str(COMPLEXITY_MIX["cqi_prediction"]),
         "PIPELINE_MIX_ANOMALY": str(COMPLEXITY_MIX["anomaly_detection"]),
         "PIPELINE_MIX_FUSION": str(COMPLEXITY_MIX["sensor_fusion"]),
@@ -149,8 +152,6 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
 
     if run.failure_injection:
         env["FAILURE_DELAY_S"] = str(run.failure_delay_s)
-
-    compose_files = resolved.compose_files
 
     failure_fn = None
     if run.failure_injection:

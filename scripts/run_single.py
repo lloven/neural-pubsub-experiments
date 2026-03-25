@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Ad-hoc single experiment run.
 
+Routes to the appropriate phase runner based on config name.
+
 Usage:
-    python scripts/run_single.py A2 medium 3 42
-    python scripts/run_single.py B3 low 5 123 --dry-run
+    python -m scripts.run_single rr medium 3 42
+    python -m scripts.run_single flat medium 3 42 --dry-run
+    python -m scripts.run_single embb-kill medium 3 42
 """
 
 from __future__ import annotations
@@ -12,20 +15,49 @@ import argparse
 import logging
 import sys
 
-from scripts._common import (
-    PROJECT_ROOT,
-    resolve_config,
-    run_single,
-)
+from scripts._common import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
+
+# Map config names to their phase (for results directory routing)
+_CONFIG_TO_PHASE: dict[str, str] = {
+    # Baseline
+    "rr": "baseline", "random": "baseline", "neural": "baseline",
+    # Slicing
+    "flat": "slicing", "slicing-neural": "slicing", "slicing-rr": "slicing",
+    "gov": "slicing", "gov-fail": "slicing",
+    # Federation
+    "static": "federation", "fed-neural": "federation", "fed-gov": "federation",
+    "broker-kill": "federation", "net-part": "federation",
+    # Resilience
+    "embb-kill": "resilience", "urllc-kill": "resilience",
+    "funnel-wait": "resilience", "funnel-proceed": "resilience", "funnel-abort": "resilience",
+    # Contention
+    "20pps": "contention", "50pps": "contention", "10pps-kill": "contention",
+}
+
+# Stress configs follow a naming pattern: {rate}pps-{strategy}-{fail}
+# They are not enumerated here; detected by pattern match.
+
+
+def _detect_phase(config: str) -> str:
+    """Detect which phase a config belongs to."""
+    if config in _CONFIG_TO_PHASE:
+        return _CONFIG_TO_PHASE[config]
+    # Stress configs: NNpps-{rr|neural}-{nofail|fail}
+    if "pps-" in config and ("-fail" in config or "-nofail" in config):
+        return "stress"
+    raise ValueError(
+        f"Unknown config: {config!r}. "
+        f"Valid: {sorted(_CONFIG_TO_PHASE.keys())} + stress patterns (e.g. 20pps-rr-fail)"
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a single experiment configuration",
+        description="Run a single experiment configuration (routes to correct phase)",
     )
-    parser.add_argument("config", help="Config name (A1, A2, ..., D4)")
+    parser.add_argument("config", help="Config name (rr, flat, embb-kill, 20pps-rr-fail, ...)")
     parser.add_argument("rate", help="Rate label (low, medium, high) or numeric")
     parser.add_argument("stages", type=int, help="Pipeline complexity (stages)")
     parser.add_argument("seed", type=int, help="Random seed")
@@ -35,46 +67,22 @@ def main() -> None:
 
     logging.basicConfig(level=getattr(logging, args.log_level))
 
-    cfg = resolve_config(args.config, rate=args.rate, stages=args.stages, seed=args.seed)
+    phase = _detect_phase(args.config)
+    logger.info("Config %r → phase %r", args.config, phase)
 
-    run_id = f"{args.config}_rate-{args.rate}_stages-{args.stages}_seed-{args.seed}"
+    # Delegate to the appropriate phase runner with --configs and --seeds
+    import subprocess
+    cmd = [
+        sys.executable, "-m", f"scripts.run_{phase}",
+        "--configs", args.config,
+        "--seeds", str(args.seed),
+    ]
+    if args.dry_run:
+        cmd.append("--dry-run")
 
-    # Determine results directory from config prefix
-    phase_letter = args.config[0].lower()
-    phase_map = {"a": "phase_a", "b": "phase_b", "c": "phase_c", "d": "phase_d"}
-    phase_dir = phase_map.get(phase_letter, "misc")
-    results_dir = PROJECT_ROOT / "results" / phase_dir
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    # Merge resolved env with duration info
-    env = dict(cfg.env)
-    warmup_s = 120
-    measurement_s = 600
-    total_duration = warmup_s + measurement_s
-    env.setdefault("DURATION_S", str(total_duration))
-    env.setdefault("WARMUP_S", str(warmup_s))
-
-    logger.info(
-        "Single run: %s (compose_files=%s, env keys=%s)",
-        run_id,
-        [f.name for f in cfg.compose_files],
-        list(env.keys()),
-    )
-
-    result = run_single(
-        run_id=run_id,
-        env=env,
-        results_dir=results_dir,
-        total_duration=total_duration,
-        dry_run=args.dry_run,
-        compose_files=cfg.compose_files,
-    )
-
-    status = result["status"]
-    logger.info("Result: %s → %s", run_id, status)
-
-    if status not in ("completed", "dry_run"):
-        sys.exit(1)
+    logger.info("Delegating to: %s", " ".join(cmd))
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

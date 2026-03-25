@@ -34,7 +34,6 @@ from scripts._common import (
     PROJECT_ROOT,
     TRANSPORTS,
     phase_main,
-    resolve_config,
     run_single,
 )
 
@@ -63,11 +62,12 @@ CONFIGS = {
     "neural": {"placement_strategy": "neural"},
 }
 
-# Mapping from new config names to _CONFIG_TABLE keys
-_CONFIG_KEY_MAP = {
-    "rr": "A1",
-    "random": "A2",
-    "neural": "A3",
+# Compose overlay and env overrides per config.
+# rr and random use the static broker; neural uses the default neural broker.
+_COMPOSE_MAP: dict[str, dict] = {
+    "rr":     {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}},
+    "random": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "random"}},
+    "neural": {"overlays": [], "env": {}},
 }
 
 
@@ -195,25 +195,23 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
         run.placement_strategy, run.transport, total_duration,
     )
 
-    # Use resolve_config for compose files (handles transport overlay)
-    config_key = _CONFIG_KEY_MAP[run.config_name]
-    resolved = resolve_config(
-        config_key, rate=run.rate_label, stages=run.pipeline_complexity,
-        seed=run.seed, transport=run.transport,
-    )
+    # Build compose files and env from _COMPOSE_MAP (self-contained, no resolve_config)
+    cmap = _COMPOSE_MAP[run.config_name]
+    compose_files = [COMPOSE_FILE] + list(cmap["overlays"])
+    if run.transport == "kafka":
+        compose_files.append(COMPOSE_KAFKA)
 
     env = {
-        **resolved.env,
+        **cmap["env"],
         "ARRIVAL_RATE": str(run.arrival_rate),
         "DURATION_S": str(total_duration),
         "SEED": str(run.seed),
+        "PIPELINE_STAGES": str(run.pipeline_complexity),
         "PIPELINE_MIX_CQI": str(mix["cqi_prediction"]),
         "PIPELINE_MIX_ANOMALY": str(mix["anomaly_detection"]),
         "PIPELINE_MIX_FUSION": str(mix["sensor_fusion"]),
         "WARMUP_S": str(run.warmup_s),
     }
-
-    compose_files = resolved.compose_files
 
     return run_single(
         run_id=run_id,

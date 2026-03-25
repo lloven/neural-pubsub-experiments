@@ -6,7 +6,7 @@ failure injection, seed determinism, and cross-phase schema consistency.
 
 Run with::
 
-    pytest -m integration tests/test_system.py -v --timeout=180
+    pytest -m integration tests/test_system.py -v
 
 Requires Docker to be running. Tests are self-contained: each starts its own
 containers and cleans up after, even on failure.

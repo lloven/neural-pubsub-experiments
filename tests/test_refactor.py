@@ -125,9 +125,9 @@ def test_default_seeds_count_is_5():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_a_arrival_rates():
+def test_baseline_arrival_rates():
     """RATES dict must match manuscript: low=2.0, medium=5.0, high=10.0."""
-    from scripts.run_phase_a import RATES
+    from scripts.run_baseline import RATES
     assert RATES["low"] == 2.0, f"Expected low=2.0, got {RATES['low']}"
     assert RATES["medium"] == 5.0, f"Expected medium=5.0, got {RATES['medium']}"
     assert RATES["high"] == 10.0, f"Expected high=10.0, got {RATES['high']}"
