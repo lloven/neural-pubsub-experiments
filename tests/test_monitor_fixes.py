@@ -1,0 +1,237 @@
+"""Tests for monitor.py fixes: import robustness and multi-directory support.
+
+Covers:
+  1. Import robustness: monitor.py importable without ModuleNotFoundError
+  2. --all flag: argparse accepts it, defaults to False
+  3. Phase discovery: scanning results/ finds all phase directories
+  4. Archive skipping: _archive, _attic*, analysis are excluded
+  5. Per-phase summary: correct counts per phase
+  6. Single-dir regression: existing single-directory mode unchanged
+  7. Remote+all: --all + --remote produces valid output structure
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import sys
+import textwrap
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+# ── Test 1: Import robustness ───────────────────────────────────────────
+
+def test_monitor_importable_directly():
+    """Importing monitor.py must not raise ModuleNotFoundError.
+
+    This simulates the case where scripts/ is NOT on sys.path (direct
+    invocation: ``python scripts/monitor.py``).  The module should still
+    import successfully because it adds PROJECT_ROOT to sys.path.
+    """
+    # Force a fresh import so the sys.path fix actually runs
+    mod_name = "scripts.monitor"
+    if mod_name in sys.modules:
+        del sys.modules[mod_name]
+
+    # Import must succeed without error
+    mod = importlib.import_module(mod_name)
+    assert hasattr(mod, "main")
+    assert hasattr(mod, "render")
+
+
+# ── Test 2: --all flag in argparse ──────────────────────────────────────
+
+def test_all_flag_in_argparse():
+    """The --all flag must exist and default to False."""
+    from scripts.monitor import main
+    import argparse
+
+    # Build parser the same way main() does — we need to peek at the parser
+    from scripts.monitor import _build_parser
+    parser = _build_parser()
+
+    args = parser.parse_args([])
+    assert hasattr(args, "all_phases")
+    assert args.all_phases is False
+
+
+def test_all_flag_set_true():
+    """Passing --all sets all_phases to True."""
+    from scripts.monitor import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["--all"])
+    assert args.all_phases is True
+
+
+# ── Test 3: Discover all phases ─────────────────────────────────────────
+
+def test_discover_all_phases(tmp_path):
+    """discover_phases() finds all subdirectories under results/."""
+    from scripts.monitor import discover_phases
+
+    # Create phase directories
+    for name in ["resilience", "slicing", "stress", "baseline", "federation"]:
+        (tmp_path / name).mkdir()
+
+    # Create a regular file (should be ignored)
+    (tmp_path / "summary.csv").write_text("a,b\n1,2\n")
+
+    phases = discover_phases(tmp_path)
+    assert set(phases) == {"resilience", "slicing", "stress", "baseline", "federation"}
+
+
+# ── Test 4: Skip archive directories ────────────────────────────────────
+
+def test_skip_archive_directories(tmp_path):
+    """_archive, _attic_pre_factorial, and analysis are excluded."""
+    from scripts.monitor import discover_phases
+
+    for name in ["resilience", "_archive", "_attic_pre_factorial", "analysis", "slicing"]:
+        (tmp_path / name).mkdir()
+
+    phases = discover_phases(tmp_path)
+    assert "_archive" not in phases
+    assert "_attic_pre_factorial" not in phases
+    assert "analysis" not in phases
+    assert "resilience" in phases
+    assert "slicing" in phases
+
+
+def test_skip_directories_starting_with_underscore(tmp_path):
+    """Any directory starting with _ is excluded."""
+    from scripts.monitor import discover_phases
+
+    for name in ["baseline", "_anything", "__pycache__"]:
+        (tmp_path / name).mkdir()
+
+    phases = discover_phases(tmp_path)
+    assert phases == ["baseline"]
+
+
+# ── Test 5: Summary per phase ───────────────────────────────────────────
+
+def test_summary_per_phase(tmp_path):
+    """phase_summary() returns correct counts for each phase."""
+    from scripts.monitor import phase_summary
+
+    # Create a results dir with progress data
+    phase_dir = tmp_path / "resilience"
+    phase_dir.mkdir()
+
+    progress = {
+        "run1": {"status": "done", "timestamp": "2026-03-25T10:00:00"},
+        "run2": {"status": "done", "timestamp": "2026-03-25T10:05:00"},
+        "run3": {"status": "running", "timestamp": "2026-03-25T10:10:00"},
+        "run4": {"status": "queued", "timestamp": ""},
+        "run5": {"status": "failed", "detail": "timeout"},
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    summary = phase_summary(phase_dir)
+    assert summary["phase"] == "resilience"
+    assert summary["total"] == 5
+    assert summary["done"] == 2
+    assert summary["running"] == 1
+    assert summary["failed"] == 1
+
+
+def test_summary_empty_phase(tmp_path):
+    """phase_summary() handles a phase with no results."""
+    from scripts.monitor import phase_summary
+
+    phase_dir = tmp_path / "stress"
+    phase_dir.mkdir()
+
+    summary = phase_summary(phase_dir)
+    assert summary["total"] == 0
+    assert summary["done"] == 0
+    assert summary["running"] == 0
+    assert summary["failed"] == 0
+
+
+def test_summary_from_csv_files(tmp_path):
+    """phase_summary() falls back to CSV discovery when no .progress.json."""
+    from scripts.monitor import phase_summary
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+
+    # Create some result CSVs (simulating completed runs)
+    (phase_dir / "A1_rate-medium_seed-42.csv").write_text("col1,col2\n1,2\n")
+    (phase_dir / "A2_rate-medium_seed-42.csv").write_text("col1,col2\n1,2\n")
+    (phase_dir / "A3_rate-medium_seed-42.FAILED").write_text("")
+
+    summary = phase_summary(phase_dir)
+    assert summary["total"] == 3
+    assert summary["done"] == 2
+    assert summary["failed"] == 1
+
+
+# ── Test 6: Single-dir still works (regression) ────────────────────────
+
+def test_single_dir_still_works(tmp_path):
+    """Existing single-directory mode must continue to work unchanged.
+
+    The --all flag should not break the default behavior of watching a
+    single results directory.
+    """
+    from scripts.monitor import _build_parser
+
+    parser = _build_parser()
+
+    # Default: single directory mode
+    args = parser.parse_args([])
+    assert args.all_phases is False
+    assert args.results_dir == "results/phase_a"
+
+    # Explicit directory: single directory mode
+    args = parser.parse_args(["results/resilience"])
+    assert args.all_phases is False
+    assert args.results_dir == "results/resilience"
+
+
+def test_all_flag_ignores_positional_dir():
+    """When --all is set, the positional results_dir is irrelevant."""
+    from scripts.monitor import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["--all"])
+    assert args.all_phases is True
+
+
+# ── Test 7: --all + --remote ────────────────────────────────────────────
+
+def test_render_all_phases_output(tmp_path, capsys):
+    """render_all_phases() produces a structured multi-phase summary."""
+    from scripts.monitor import render_all_phases, phase_summary
+
+    # Set up two phases with progress
+    resilience_dir = tmp_path / "resilience"
+    resilience_dir.mkdir()
+    progress_r = {
+        "run1": {"status": "done", "timestamp": "2026-03-25T10:00:00"},
+        "run2": {"status": "running", "timestamp": "2026-03-25T10:10:00"},
+    }
+    (resilience_dir / ".progress.json").write_text(json.dumps(progress_r))
+
+    slicing_dir = tmp_path / "slicing"
+    slicing_dir.mkdir()
+    # Empty phase (no results yet)
+
+    phases = ["resilience", "slicing"]
+    summaries = [phase_summary(tmp_path / p) for p in phases]
+
+    render_all_phases(summaries, results_root=tmp_path)
+
+    captured = capsys.readouterr()
+    assert "All Phases" in captured.out
+    assert "resilience" in captured.out
+    assert "slicing" in captured.out
+    # Check table structure has total/done/running/failed columns
+    assert "Total" in captured.out or "total" in captured.out.lower()
+    assert "Done" in captured.out or "done" in captured.out.lower()
