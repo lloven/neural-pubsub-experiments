@@ -187,7 +187,7 @@ def test_single_dir_still_works(tmp_path):
     # Default: single directory mode
     args = parser.parse_args([])
     assert args.all_phases is False
-    assert args.results_dir == "results/phase_a"
+    assert args.results_dir == "results/baseline"
 
     # Explicit directory: single directory mode
     args = parser.parse_args(["results/resilience"])

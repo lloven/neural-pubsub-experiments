@@ -26,39 +26,39 @@ from scripts._common import DEFAULT_SEEDS, EXTENDED_SEEDS, TRANSPORTS
 EXPERIMENTS: dict[str, dict] = {
     "baseline": {
         "description": "Single-site baselines (dual-transport factorial)",
-        "configs": ["A1", "A2", "A3"],
+        "configs": ["rr", "random", "neural"],
         "seeds": DEFAULT_SEEDS,
         "transports": TRANSPORTS,
         "notes": (
             "Core factorial: configs x transports x seeds at medium rate, "
-            "plus rate sensitivity arm (A3/http x all rates). "
+            "plus rate sensitivity arm (neural/http x all rates). "
             "Run count is computed by build_run_matrix, not a simple product."
         ),
     },
     "contention": {
         "description": "Resource contention",
-        "configs": ["A6.1", "A6.2", "A6.3"],
+        "configs": ["20pps", "50pps", "10pps-kill"],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
         # Simple product: 3 configs x 5 seeds = 15
     },
     "slicing": {
         "description": "Slice-aware placement",
-        "configs": ["B1", "B1eq", "B2", "B2flat", "B3", "B4"],
+        "configs": ["flat", "neural", "rr", "gov", "gov-fail"],
         "seeds": DEFAULT_SEEDS,
         "transports": TRANSPORTS,
-        # 6 configs x 2 transports x 5 seeds = 60
+        # 5 configs x 2 transports x 5 seeds = 50
     },
     "federation": {
         "description": "Cross-site federation",
-        "configs": ["C1", "C2", "C3", "C4"],
+        "configs": ["static", "neural", "gov", "broker-kill", "net-part"],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
-        # 4 configs x 5 seeds = 20
+        # 5 configs x 5 seeds = 25
     },
     "resilience": {
         "description": "Failure and adaptation",
-        "configs": ["D1", "D2", "D3", "D4", "D5"],
+        "configs": ["embb-kill", "urllc-kill", "funnel-wait", "funnel-proceed", "funnel-abort"],
         "seeds": EXTENDED_SEEDS,
         "transports": ["http"],
         # Default (S3 only): 5 configs x 10 seeds = 50
@@ -68,10 +68,17 @@ EXPERIMENTS: dict[str, dict] = {
     },
     "stress": {
         "description": "Combined H3+H6 contention + failure",
-        "configs": ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"],
+        "configs": [
+            "10pps-rr-nofail", "10pps-neural-nofail",
+            "10pps-rr-fail", "10pps-neural-fail",
+            "20pps-rr-nofail", "20pps-neural-nofail",
+            "20pps-rr-fail", "20pps-neural-fail",
+            "50pps-rr-nofail", "50pps-neural-nofail",
+            "50pps-rr-fail", "50pps-neural-fail",
+        ],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
-        # 8 configs x 5 seeds = 40
+        # 12 configs x 5 seeds = 60
     },
 }
 

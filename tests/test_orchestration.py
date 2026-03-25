@@ -1,8 +1,8 @@
 """Tests for the unified orchestration layer.
 
 Covers:
-  - Cycle 1: resolve_config() — config→compose-files and config→env mapping
-  - Cycle 2: Phase B compose overlay wiring
+  - Cycle 1: Runner _COMPOSE_MAP integrity (broker/placement/overlays)
+  - Cycle 2: Slicing compose overlay wiring
   - Cycle 3: Monitor --once flag and CSV discovery
   - Cycle 4: Bash dispatcher delegation
   - Cycle 6: BUG-001 — Workload generator hard timeout
@@ -25,7 +25,7 @@ import pytest
 from scripts._common import PROJECT_ROOT
 from scripts.experiment_matrix import expected_run_count
 
-# Compose file paths (constants that resolve_config should use)
+# Compose file paths (constants used by runner _COMPOSE_MAPs)
 COMPOSE_LOCAL = PROJECT_ROOT / "docker-compose.local.yaml"
 COMPOSE_KAFKA = PROJECT_ROOT / "docker-compose.kafka.yaml"
 COMPOSE_FLAT = PROJECT_ROOT / "docker-compose.flat.yaml"
@@ -36,129 +36,56 @@ COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
 # Cycle 1: resolve_config()
 # ============================================================================
 
-class TestResolveConfig:
-    """Tests 1-9: resolve_config() maps config names to compose files and env."""
+class TestComposeMapIntegrity:
+    """Tests that runner _COMPOSE_MAPs have correct broker/placement settings."""
 
-    def _resolve(self, config_name: str, rate: str = "medium", stages: int = 3, seed: int = 42, transport: str = "http"):
-        from scripts._common import resolve_config
-        return resolve_config(config_name, rate=rate, stages=stages, seed=seed, transport=transport)
+    def test_baseline_rr_is_static_round_robin(self):
+        from scripts.run_baseline import _COMPOSE_MAP
+        assert _COMPOSE_MAP["rr"]["env"]["BROKER_MODULE"] == "src.broker.static_broker"
+        assert _COMPOSE_MAP["rr"]["env"]["PLACEMENT"] == "round_robin"
 
-    # --- Compose file resolution ---
+    def test_baseline_random_is_static_random(self):
+        from scripts.run_baseline import _COMPOSE_MAP
+        assert _COMPOSE_MAP["random"]["env"]["BROKER_MODULE"] == "src.broker.static_broker"
+        assert _COMPOSE_MAP["random"]["env"]["PLACEMENT"] == "random"
 
-    def test_A1_is_static_round_robin(self):
-        """Test 1: A1 = static round-robin (renumbered from old A2)."""
-        cfg = self._resolve("A1")
-        assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
-        assert cfg.env["PLACEMENT"] == "round_robin"
+    def test_baseline_neural_has_no_overrides(self):
+        from scripts.run_baseline import _COMPOSE_MAP
+        assert "BROKER_MODULE" not in _COMPOSE_MAP["neural"]["env"]
 
-    def test_B1_uses_flat_overlay(self):
-        """Test 2: B1 config uses local + flat compose files."""
-        cfg = self._resolve("B1")
-        assert cfg.compose_files == [COMPOSE_LOCAL, COMPOSE_FLAT]
+    def test_slicing_flat_uses_flat_eq_overlay(self):
+        from scripts.run_slicing import _COMPOSE_MAP
+        from scripts._common import COMPOSE_FLAT_EQ
+        assert COMPOSE_FLAT_EQ in _COMPOSE_MAP["flat"]["overlays"]
 
-    def test_B3_uses_governance_overlay(self):
-        """Test 3: B3 config uses local + governance compose files."""
-        cfg = self._resolve("B3")
-        assert cfg.compose_files == [COMPOSE_LOCAL, COMPOSE_GOVERNANCE]
+    def test_slicing_gov_uses_governance_overlay(self):
+        from scripts.run_slicing import _COMPOSE_MAP
+        assert COMPOSE_GOVERNANCE in _COMPOSE_MAP["gov"]["overlays"]
 
-    def test_B4_uses_governance_overlay(self):
-        """Test 4: B4 config uses local + governance compose files."""
-        cfg = self._resolve("B4")
-        assert cfg.compose_files == [COMPOSE_LOCAL, COMPOSE_GOVERNANCE]
+    def test_slicing_gov_fail_uses_governance_overlay(self):
+        from scripts.run_slicing import _COMPOSE_MAP
+        assert COMPOSE_GOVERNANCE in _COMPOSE_MAP["gov-fail"]["overlays"]
 
-    def test_A2_uses_base_only(self):
-        """Test 5: A2 config uses only the local compose file."""
-        cfg = self._resolve("A2")
-        assert cfg.compose_files == [COMPOSE_LOCAL]
+    def test_slicing_rr_uses_static_broker(self):
+        from scripts.run_slicing import _COMPOSE_MAP
+        assert _COMPOSE_MAP["rr"]["env"]["BROKER_MODULE"] == "src.broker.static_broker"
 
-    # --- Environment variable resolution ---
-
-    def test_A1_kafka_transport_adds_kafka_overlay(self):
-        """Test 6: A1 with transport='kafka' adds kafka compose overlay."""
-        cfg = self._resolve("A1", transport="kafka")
-        assert COMPOSE_KAFKA in cfg.compose_files
-        assert COMPOSE_LOCAL in cfg.compose_files
-
-    def test_A1_http_transport_no_kafka_overlay(self):
-        """Test 6b: A1 with transport='http' does NOT add kafka overlay."""
-        cfg = self._resolve("A1", transport="http")
-        assert COMPOSE_KAFKA not in cfg.compose_files
-
-    def test_A1_env_has_static_broker_round_robin(self):
-        """Test 7: A1 env sets static broker with round_robin placement."""
-        cfg = self._resolve("A1")
-        assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
-        assert cfg.env["PLACEMENT"] == "round_robin"
-
-    def test_A2_env_has_static_broker_random(self):
-        """Test 8: A2 env sets static broker with random placement."""
-        cfg = self._resolve("A2")
-        assert cfg.env["BROKER_MODULE"] == "src.broker.static_broker"
-        assert cfg.env["PLACEMENT"] == "random"
-
-    def test_rate_mapping(self):
-        """Test 9: Rate labels map to correct numeric values."""
-        for label, expected in [("low", "2.0"), ("medium", "5.0"), ("high", "10.0")]:
-            cfg = self._resolve("A3", rate=label)
-            assert cfg.env["ARRIVAL_RATE"] == expected, f"rate={label} should map to {expected}"
-
-    # --- Additional edge cases ---
-
-    def test_A4_uses_base_only(self):
-        """A4 (neural) uses only the local compose file."""
-        cfg = self._resolve("A3")
-        assert cfg.compose_files == [COMPOSE_LOCAL]
-
-    def test_A4_env_has_no_broker_module(self):
-        """A4 (neural, default) does not set BROKER_MODULE."""
-        cfg = self._resolve("A3")
-        assert "BROKER_MODULE" not in cfg.env
-
-    def test_B2_uses_base_only(self):
-        """B2 uses only the local compose file."""
-        cfg = self._resolve("B2")
-        assert cfg.compose_files == [COMPOSE_LOCAL]
-
-    def test_C_configs_use_base_only(self):
-        """C1-C3 use only the local compose file."""
-        for name in ["C1", "C2", "C3"]:
-            cfg = self._resolve(name)
-            assert cfg.compose_files == [COMPOSE_LOCAL], f"{name} should use base only"
-
-    def test_D_configs_use_base_only(self):
-        """D1-D2 use only the local compose file."""
-        for name in ["D1", "D2"]:
-            cfg = self._resolve(name)
-            assert cfg.compose_files == [COMPOSE_LOCAL], f"{name} should use base only"
-
-    def test_unknown_config_raises(self):
-        """Unknown config name should raise ValueError."""
-        with pytest.raises(ValueError, match="Unknown config"):
-            self._resolve("Z9")
-
-    def test_seed_in_env(self):
-        """Seed is passed through to env."""
-        cfg = self._resolve("A3", seed=999)
-        assert cfg.env["SEED"] == "999"
-
-    def test_stages_in_env(self):
-        """Pipeline stages are passed through to env."""
-        cfg = self._resolve("A3", stages=5)
-        assert cfg.env.get("PIPELINE_STAGES") == "5" or "DURATION_S" in cfg.env
+    def test_slicing_neural_has_no_overlay(self):
+        from scripts.run_slicing import _COMPOSE_MAP
+        assert _COMPOSE_MAP["neural"]["overlays"] == []
 
 
 # ============================================================================
-# Cycle 2: Phase B compose overlay wiring
+# Cycle 2: Slicing compose overlay wiring (replaces old Phase B tests)
 # ============================================================================
 
-class TestPhaseBOverlays:
-    """Tests 10-14: Phase B orchestrator passes correct compose files."""
+class TestSlicingOverlays:
+    """Slicing orchestrator passes correct compose files via _COMPOSE_MAP."""
 
     def _get_run_kwargs(self, config_name: str, seed: int = 42):
-        """Call Phase B's _run() in dry-run mode and capture the compose_files
-        passed to run_single() via monkey-patching."""
+        """Call Slicing's _run() and capture compose_files via monkey-patching."""
         from unittest.mock import patch
-        from scripts.run_phase_b import RunConfig, CONFIGS, _run
+        from scripts.run_slicing import RunConfig, CONFIGS, _run
 
         cfg = CONFIGS[config_name]
         run = RunConfig(
@@ -169,54 +96,42 @@ class TestPhaseBOverlays:
             failure_injection=cfg["failure_injection"],
         )
 
-        # Patch run_single to capture kwargs instead of running Docker
         captured = {}
         def fake_run_single(**kwargs):
             captured.update(kwargs)
             return {"run_id": kwargs["run_id"], "status": "completed", "result_file": "fake.csv"}
 
-        with patch("scripts.run_phase_b.run_single", side_effect=fake_run_single):
+        with patch("scripts.run_slicing.run_single", side_effect=fake_run_single):
             _run(run, dry_run=False)
 
         return captured
 
-    def test_B1_uses_flat_overlay(self):
-        """Test 10: Phase B runner passes flat overlay for B1."""
-        kwargs = self._get_run_kwargs("B1")
-        assert kwargs.get("compose_files") is not None, "B1 must pass compose_files"
+    def test_flat_uses_flat_eq_overlay(self):
+        kwargs = self._get_run_kwargs("flat")
         names = [f.name for f in kwargs["compose_files"]]
-        assert "docker-compose.flat.yaml" in names
+        assert "docker-compose.flat-equalized.yaml" in names
 
-    def test_B2_uses_base_only(self):
-        """Test 11: Phase B runner uses only local.yaml for B2."""
-        kwargs = self._get_run_kwargs("B2")
-        files = kwargs.get("compose_files")
-        # B2 either passes None (uses default) or passes [local] only
-        if files is not None:
-            names = [f.name for f in files]
-            assert names == ["docker-compose.local.yaml"]
+    def test_neural_uses_base_only(self):
+        kwargs = self._get_run_kwargs("neural")
+        names = [f.name for f in kwargs["compose_files"]]
+        assert names == ["docker-compose.local.yaml"]
 
-    def test_B3_uses_governance_overlay(self):
-        """Test 12: Phase B runner passes governance overlay for B3."""
-        kwargs = self._get_run_kwargs("B3")
-        assert kwargs.get("compose_files") is not None, "B3 must pass compose_files"
+    def test_gov_uses_governance_overlay(self):
+        kwargs = self._get_run_kwargs("gov")
         names = [f.name for f in kwargs["compose_files"]]
         assert "docker-compose.governance.yaml" in names
 
-    def test_B4_has_failure_injection(self):
-        """Test 13: B4 run config sets failure_fn."""
-        kwargs = self._get_run_kwargs("B4")
-        assert kwargs.get("failure_fn") is not None, "B4 must have failure injection"
+    def test_gov_fail_has_failure_injection(self):
+        kwargs = self._get_run_kwargs("gov-fail")
+        assert kwargs.get("failure_fn") is not None
 
-    def test_phase_b_matrix_is_expected_runs(self):
-        """Test 14: All Phase B configs x transports x seeds = expected runs."""
-        from scripts.run_phase_b import build_run_matrix, CONFIGS
+    def test_slicing_matrix_is_expected_runs(self):
+        from scripts.run_slicing import build_run_matrix, CONFIGS
         runs = build_run_matrix(
-            list(CONFIGS.keys()),
+            sorted(CONFIGS.keys()),
             [42, 123, 456, 789, 0],
         )
-        expected = expected_run_count("B")
-        assert len(runs) == expected
+        assert len(runs) == 50  # 5 configs x 2 transports x 5 seeds
 
 
 # ============================================================================
@@ -308,7 +223,7 @@ class TestBashDispatcher:
             cwd=str(PROJECT_ROOT),
         )
         output = result.stdout + result.stderr
-        for cmd in ["phase-a", "phase-b", "phase-c", "phase-d", "single", "smoke", "status", "stop"]:
+        for cmd in ["baseline", "slicing", "federation", "resilience", "single", "smoke", "status", "stop"]:
             assert cmd in output, f"Help should mention '{cmd}'"
 
     def test_single_calls_python_script(self):
@@ -319,7 +234,7 @@ class TestBashDispatcher:
         # so we capture what we need from the trace and accept timeout.
         try:
             result = subprocess.run(
-                ["bash", "-x", self.SCRIPT, "single", "A2", "low", "3", "42"],
+                ["bash", "-x", self.SCRIPT, "single", "random", "low", "3", "42"],
                 capture_output=True, text=True, timeout=10,
                 cwd=str(PROJECT_ROOT),
             )

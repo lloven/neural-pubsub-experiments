@@ -8,8 +8,8 @@ Displays:
   - Recent partial CSV stats (from crash-resilient snapshots)
 
 Usage:
-    python scripts/monitor.py                          # monitor results/phase_a
-    python scripts/monitor.py results/phase_b          # monitor specific phase
+    python scripts/monitor.py                          # monitor results/baseline
+    python scripts/monitor.py results/slicing          # monitor specific phase
     python scripts/monitor.py --interval 2             # refresh every 2s
     python scripts/monitor.py --all                    # monitor all phases
     python scripts/monitor.py --all --remote HOST      # all phases on remote
@@ -604,8 +604,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser for the monitor CLI."""
     parser = argparse.ArgumentParser(description="Monitor Neural Pub/Sub experiments")
     parser.add_argument(
-        "results_dir", nargs="?", default="results/phase_a",
-        help="Results directory to monitor (default: results/phase_a)",
+        "results_dir", nargs="?", default="results/baseline",
+        help="Results directory to monitor (default: results/baseline)",
     )
     parser.add_argument(
         "--all", dest="all_phases", action="store_true",

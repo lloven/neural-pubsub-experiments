@@ -139,34 +139,34 @@ class TestDataIntegrity:
     """Experiment data is preserved after the rename."""
 
     def test_baseline_has_3_configs(self):
-        assert get_configs("baseline") == ["A1", "A2", "A3"]
+        assert get_configs("baseline") == ["rr", "random", "neural"]
 
     def test_contention_has_3_configs(self):
-        assert get_configs("contention") == ["A6.1", "A6.2", "A6.3"]
+        assert get_configs("contention") == ["20pps", "50pps", "10pps-kill"]
 
-    def test_slicing_has_6_configs(self):
-        assert len(get_configs("slicing")) == 6
+    def test_slicing_has_5_configs(self):
+        assert get_configs("slicing") == ["flat", "neural", "rr", "gov", "gov-fail"]
 
-    def test_federation_has_4_configs(self):
-        assert len(get_configs("federation")) == 4
+    def test_federation_has_5_configs(self):
+        assert get_configs("federation") == ["static", "neural", "gov", "broker-kill", "net-part"]
 
     def test_resilience_has_5_configs(self):
-        assert len(get_configs("resilience")) == 5
+        assert get_configs("resilience") == ["embb-kill", "urllc-kill", "funnel-wait", "funnel-proceed", "funnel-abort"]
 
-    def test_stress_has_8_configs(self):
-        assert len(get_configs("stress")) == 8
+    def test_stress_has_12_configs(self):
+        assert len(get_configs("stress")) == 12
 
     def test_contention_run_count(self):
         assert expected_run_count("contention") == 15  # 3 configs x 5 seeds
 
     def test_slicing_run_count(self):
-        assert expected_run_count("slicing") == 60  # 6 x 2 x 5
+        assert expected_run_count("slicing") == 50  # 5 x 2 x 5
 
     def test_resilience_run_count(self):
         assert expected_run_count("resilience") == 50  # 5 x 1(S3) x 10
 
     def test_stress_run_count(self):
-        assert expected_run_count("stress") == 40  # 8 x 5
+        assert expected_run_count("stress") == 60  # 12 x 5
 
 
 # ---------------------------------------------------------------------------

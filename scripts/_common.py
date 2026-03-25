@@ -16,9 +16,6 @@ All experiment runners (run_baseline.py, run_slicing.py, run_federation.py,
 run_resilience.py, run_stress.py, run_placement.py, run_contention.py)
 import from this module; experiment-specific logic is limited to config
 definitions, run-matrix construction, and environment variable mapping.
-
-Legacy runners (run_phase_a.py through run_phase_e.py) are kept for
-backward compatibility but are superseded by the descriptively named runners.
 """
 
 from __future__ import annotations
@@ -47,8 +44,8 @@ COMPOSE_KAFKA = PROJECT_ROOT / "docker-compose.kafka.yaml"
 COMPOSE_FLAT = PROJECT_ROOT / "docker-compose.flat.yaml"
 COMPOSE_FLAT_EQ = PROJECT_ROOT / "docker-compose.flat-equalized.yaml"
 COMPOSE_GOVERNANCE = PROJECT_ROOT / "docker-compose.governance.yaml"
-DEFAULT_SEEDS = [42, 123, 456, 789, 0]  # 5 seeds (Phases A/B/C); Phase D uses 10
-EXTENDED_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]  # 10 seeds for Phase D
+DEFAULT_SEEDS = [42, 123, 456, 789, 0]  # 5 seeds (baseline/slicing/federation); resilience uses 10
+EXTENDED_SEEDS = [42, 123, 456, 789, 0, 7, 2024, 31415, 271828, 1337]  # 10 seeds for resilience
 
 # Default run timing (seconds). Used by phase runners and monitor.
 DEFAULT_WARMUP_S = 120
@@ -92,103 +89,8 @@ def _cleanup_current_project(signum: int, frame: Any) -> None:
     sys.exit(128 + signum)
 
 
-# ---------------------------------------------------------------------------
-# Config resolution (unified mapping from config name → compose + env)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ResolvedConfig:
-    """Result of resolving a config name to compose files and env vars."""
-    compose_files: list[Path]
-    env: dict[str, str]
-
-    # Optional broker module override (informational; already encoded in env)
-    broker_module: str | None = None
-
-
 # Transport modes for the factorial experiment.
 TRANSPORTS = ["http", "kafka"]
-
-# Config name → (extra compose overlays, env overrides, broker_module).
-# Renumbered in dual-transport refactor (2026-03-21): A1=round-robin,
-# A2=random, A3=neural (old A1/Kafka-only dropped, old A2-A4 shifted).
-# All baselines run under both http and kafka transport (factorial design).
-_CONFIG_TABLE: dict[str, dict] = {
-    # Phase A: single-site baselines (3 placements × 2 transports)
-    "A1": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
-    "A2": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "random"}, "broker": "src.broker.static_broker"},
-    "A3": {"overlays": [], "env": {}, "broker": None},
-    # Phase B: slice-aware placement (4 configs × 2 transports)
-    "B1": {"overlays": [COMPOSE_FLAT], "env": {}, "broker": None},
-    "B1eq": {"overlays": [COMPOSE_FLAT_EQ], "env": {}, "broker": None},
-    "B2": {"overlays": [], "env": {}, "broker": None},
-    "B2flat": {"overlays": [], "env": {"BROKER_MODULE": "src.broker.static_broker", "PLACEMENT": "round_robin"}, "broker": "src.broker.static_broker"},
-    "B3": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
-    "B4": {"overlays": [COMPOSE_GOVERNANCE], "env": {}, "broker": None},
-    # Phase C: cross-site federation (3 configs × 2 transports)
-    "C1": {"overlays": [], "env": {}, "broker": None},
-    "C2": {"overlays": [], "env": {}, "broker": None},
-    "C3": {"overlays": [], "env": {}, "broker": None},
-    "C4": {"overlays": [], "env": {}, "broker": None},
-    "C5": {"overlays": [], "env": {}, "broker": None},
-    # Phase D: worker failure resilience (2 configs: eMBB + URLLC worker kills)
-    "D1": {"overlays": [], "env": {}, "broker": None},
-    "D2": {"overlays": [], "env": {}, "broker": None},
-}
-
-
-def resolve_config(
-    config_name: str,
-    rate: str = "medium",
-    stages: int = 3,
-    seed: int = 42,
-    transport: str = "http",
-) -> ResolvedConfig:
-    """Resolve a config name (e.g. 'A2', 'B3') to compose files and env vars.
-
-    Args:
-        config_name: Experiment configuration identifier (A2-A4, B1-B4, etc.).
-        rate: Workload rate label ('low', 'medium', 'high').
-        stages: Pipeline complexity (number of stages).
-        seed: Random seed for the run.
-        transport: Dispatch transport mode ('http' or 'kafka').
-
-    Returns:
-        A ResolvedConfig with compose_files list and env dict.
-
-    Raises:
-        ValueError: If config_name is not recognised.
-    """
-    if config_name not in _CONFIG_TABLE:
-        raise ValueError(
-            f"Unknown config: {config_name}. "
-            f"Valid: {sorted(_CONFIG_TABLE.keys())}"
-        )
-
-    entry = _CONFIG_TABLE[config_name]
-    compose_files = [COMPOSE_FILE] + list(entry["overlays"])
-
-    # Kafka transport: add the Kafka overlay
-    if transport == "kafka":
-        compose_files.append(COMPOSE_KAFKA)
-
-    if rate in RATE_MAP:
-        arrival_rate = RATE_MAP[rate]
-    else:
-        arrival_rate = float(rate)
-
-    env: dict[str, str] = {
-        "ARRIVAL_RATE": str(arrival_rate),
-        "SEED": str(seed),
-        "PIPELINE_STAGES": str(stages),
-        **entry["env"],
-    }
-
-    return ResolvedConfig(
-        compose_files=compose_files,
-        env=env,
-        broker_module=entry["broker"],
-    )
 
 
 def shuffle_configs(configs: list, seed: int = 42) -> list:

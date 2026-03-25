@@ -157,13 +157,13 @@ def _cleanup_stack():
     )
 
 
-def run_phase_a_smoke(transport: str = "http") -> dict:
-    """Phase A smoke: single config (A3=neural), single rate, single seed."""
-    logger.info("=== Phase A Smoke (Neural Pub/Sub, medium rate, transport=%s) ===", transport)
+def run_baseline_smoke(transport: str = "http") -> dict:
+    """Baseline smoke: single config (neural), single rate, single seed."""
+    logger.info("=== Baseline Smoke (Neural Pub/Sub, medium rate, transport=%s) ===", transport)
     result = subprocess.run(
         [
-            sys.executable, "-m", "scripts.run_phase_a",
-            "--configs", "A3",
+            sys.executable, "-m", "scripts.run_baseline",
+            "--configs", "neural",
             "--rates", "medium",
             "--complexities", "3",
             "--seeds", "42",
@@ -174,7 +174,7 @@ def run_phase_a_smoke(transport: str = "http") -> dict:
         text=True,
         timeout=30,
     )
-    logger.info("Phase A dry run: exit=%d", result.returncode)
+    logger.info("Baseline dry run: exit=%d", result.returncode)
     if result.stdout:
         logger.info(result.stdout[-300:])
     return {
@@ -231,7 +231,7 @@ def main():
         results["stack"] = run_stack_smoke()
 
     if "A" in args.phases:
-        results["phase_a"] = run_phase_a_smoke()
+        results["baseline"] = run_baseline_smoke()
 
     if "figures" in args.phases and not args.skip_figures:
         results["figures"] = run_figure_smoke()

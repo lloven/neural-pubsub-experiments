@@ -1,13 +1,8 @@
 """Tests for slicing configurations: flat and rr.
 
-Merged from test_b1eq_smoke.py and test_b2flat_smoke.py. Tests both the
-flat (equalized) baseline and rr (round-robin on sliced topology) configs.
-
-Covers:
-  - resolve_config returns correct compose overlays and env for flat/rr
-  - Docker Compose config validation (5 workers, correct networks)
-  - Slicing run matrix includes flat and rr
-  - rr uses static broker with round-robin placement
+Tests both the flat (equalized) baseline and rr (round-robin on sliced
+topology) configs, validating compose overlays, Docker topology, slicing
+run matrix inclusion, and placement strategy propagation.
 """
 
 from __future__ import annotations
@@ -24,8 +19,8 @@ from scripts._common import (
     COMPOSE_FLAT,
     COMPOSE_FLAT_EQ,
     PROJECT_ROOT,
-    _CONFIG_TABLE,
 )
+from scripts.run_slicing import _COMPOSE_MAP
 
 
 COMPOSE_LOCAL = PROJECT_ROOT / "docker-compose.local.yaml"
@@ -36,48 +31,22 @@ COMPOSE_LOCAL = PROJECT_ROOT / "docker-compose.local.yaml"
 # ============================================================================
 
 
-class TestFlatResolveConfig:
-    """flat config must resolve to the flat-equalized overlay with no extra env."""
+class TestFlatComposeMap:
+    """flat config must use the flat-equalized overlay with no extra env."""
 
-    def _resolve(self, config_name: str, **kwargs):
-        from scripts._common import resolve_config
-        return resolve_config(config_name, **kwargs)
+    def test_flat_in_compose_map(self):
+        assert "flat" in _COMPOSE_MAP
 
-    def test_b1eq_is_recognised(self):
-        """resolve_config('B1eq') must not raise ValueError."""
-        cfg = self._resolve("B1eq")
-        assert cfg is not None
+    def test_flat_uses_flat_equalized_overlay(self):
+        overlays = _COMPOSE_MAP["flat"]["overlays"]
+        assert COMPOSE_FLAT_EQ in overlays
+        assert COMPOSE_FLAT not in overlays
 
-    def test_b1eq_uses_flat_equalized_overlay(self):
-        """B1eq must use docker-compose.flat-equalized.yaml, NOT docker-compose.flat.yaml."""
-        cfg = self._resolve("B1eq")
-        overlay_names = [f.name for f in cfg.compose_files]
-        assert "docker-compose.flat-equalized.yaml" in overlay_names
-        assert "docker-compose.flat.yaml" not in overlay_names
+    def test_flat_has_no_broker_module_override(self):
+        assert "BROKER_MODULE" not in _COMPOSE_MAP["flat"]["env"]
 
-    def test_b1eq_compose_files_are_local_plus_flat_eq(self):
-        """B1eq compose_files = [local, flat-equalized]."""
-        cfg = self._resolve("B1eq")
-        assert cfg.compose_files == [COMPOSE_LOCAL, COMPOSE_FLAT_EQ]
-
-    def test_b1eq_has_no_broker_module_override(self):
-        cfg = self._resolve("B1eq")
-        assert "BROKER_MODULE" not in cfg.env
-
-    def test_b1eq_broker_is_none(self):
-        cfg = self._resolve("B1eq")
-        assert cfg.broker_module is None
-
-    def test_b1eq_kafka_transport_adds_kafka_overlay(self):
-        from scripts._common import COMPOSE_KAFKA
-        cfg = self._resolve("B1eq", transport="kafka")
-        assert COMPOSE_KAFKA in cfg.compose_files
-
-    def test_b1eq_env_has_standard_fields(self):
-        cfg = self._resolve("B1eq", rate="medium", seed=42, stages=3)
-        assert cfg.env["ARRIVAL_RATE"] == "5.0"
-        assert cfg.env["SEED"] == "42"
-        assert cfg.env["PIPELINE_STAGES"] == "3"
+    def test_flat_has_no_placement_override(self):
+        assert "PLACEMENT" not in _COMPOSE_MAP["flat"]["env"]
 
 
 class TestFlatComposeConfig:
@@ -179,67 +148,38 @@ class TestFlatInSlicing:
 # ============================================================================
 
 
-class TestRrResolveConfig:
-    """rr config must resolve to local compose with no flat overlay."""
+class TestRrComposeMap:
+    """rr config must use local compose with no flat overlay and static broker."""
 
-    def _resolve(self, config_name: str, **kwargs):
-        from scripts._common import resolve_config
-        return resolve_config(config_name, **kwargs)
+    def test_rr_in_compose_map(self):
+        assert "rr" in _COMPOSE_MAP
 
-    def test_b2flat_is_recognised(self):
-        cfg = self._resolve("B2flat")
-        assert cfg is not None
+    def test_rr_uses_no_flat_overlay(self):
+        overlays = _COMPOSE_MAP["rr"]["overlays"]
+        assert COMPOSE_FLAT not in overlays
+        assert COMPOSE_FLAT_EQ not in overlays
 
-    def test_b2flat_uses_no_flat_overlay(self):
-        cfg = self._resolve("B2flat")
-        overlay_names = [f.name for f in cfg.compose_files]
-        assert "docker-compose.flat.yaml" not in overlay_names
-        assert "docker-compose.flat-equalized.yaml" not in overlay_names
+    def test_rr_has_no_overlays(self):
+        assert _COMPOSE_MAP["rr"]["overlays"] == []
 
-    def test_b2flat_compose_files_are_local_only(self):
-        cfg = self._resolve("B2flat", transport="http")
-        assert cfg.compose_files == [COMPOSE_LOCAL]
+    def test_rr_uses_static_broker(self):
+        assert _COMPOSE_MAP["rr"]["env"]["BROKER_MODULE"] == "src.broker.static_broker"
 
-    def test_b2flat_env_has_standard_fields(self):
-        cfg = self._resolve("B2flat", rate="medium", seed=42, stages=3)
-        assert cfg.env["ARRIVAL_RATE"] == "5.0"
-        assert cfg.env["SEED"] == "42"
-        assert cfg.env["PIPELINE_STAGES"] == "3"
+    def test_rr_uses_round_robin_placement(self):
+        assert _COMPOSE_MAP["rr"]["env"]["PLACEMENT"] == "round_robin"
 
-
-class TestRrPlacement:
-    """rr must use the static broker with round-robin placement."""
-
-    def test_b2flat_uses_static_broker(self):
-        entry = _CONFIG_TABLE["B2flat"]
-        assert entry["env"]["BROKER_MODULE"] == "src.broker.static_broker"
-
-    def test_b2flat_uses_round_robin_placement(self):
-        entry = _CONFIG_TABLE["B2flat"]
-        assert entry["env"]["PLACEMENT"] == "round_robin"
-
-    def test_b2flat_broker_is_static(self):
-        entry = _CONFIG_TABLE["B2flat"]
-        assert entry["broker"] == "src.broker.static_broker"
-
-    def test_b2_uses_neural_broker(self):
-        entry = _CONFIG_TABLE["B2"]
-        assert "BROKER_MODULE" not in entry["env"]
-        assert entry["broker"] is None
+    def test_neural_uses_no_broker_override(self):
+        assert "BROKER_MODULE" not in _COMPOSE_MAP["neural"]["env"]
 
 
 class TestRrTopologyMatchesNeural:
     """rr must use the same Docker topology as neural (sliced, 2 brokers, 5 workers)."""
 
-    def test_b2flat_same_overlays_as_b2(self):
-        entry_b2 = _CONFIG_TABLE["B2"]
-        entry_b2flat = _CONFIG_TABLE["B2flat"]
-        assert entry_b2["overlays"] == entry_b2flat["overlays"]
+    def test_rr_same_overlays_as_neural(self):
+        assert _COMPOSE_MAP["rr"]["overlays"] == _COMPOSE_MAP["neural"]["overlays"]
 
-    def test_b2flat_different_from_b1eq_overlays(self):
-        entry_b1eq = _CONFIG_TABLE["B1eq"]
-        entry_b2flat = _CONFIG_TABLE["B2flat"]
-        assert entry_b1eq["overlays"] != entry_b2flat["overlays"]
+    def test_flat_different_from_rr_overlays(self):
+        assert _COMPOSE_MAP["flat"]["overlays"] != _COMPOSE_MAP["rr"]["overlays"]
 
 
 class TestRrInSlicing:
