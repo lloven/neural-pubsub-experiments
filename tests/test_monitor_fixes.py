@@ -235,3 +235,43 @@ def test_render_all_phases_output(tmp_path, capsys):
     # Check table structure has total/done/running/failed columns
     assert "Total" in captured.out or "total" in captured.out.lower()
     assert "Done" in captured.out or "done" in captured.out.lower()
+
+
+def test_discover_phases_remote(tmp_path):
+    """discover_phases with remote_host uses SSH, not local filesystem."""
+    from unittest.mock import patch
+    from scripts.monitor import discover_phases
+
+    ssh_output = "/home/user/results/resilience/\n/home/user/results/slicing/\n/home/user/results/_archive/\n"
+
+    with patch("subprocess.check_output", return_value=ssh_output) as mock_ssh:
+        phases = discover_phases(tmp_path / "results", remote_host="test-host")
+
+    mock_ssh.assert_called_once()
+    assert "resilience" in phases
+    assert "slicing" in phases
+    assert "_archive" not in phases  # skipped
+
+
+def test_discover_phases_remote_passes_host(tmp_path):
+    """discover_phases passes remote_host to SSH command."""
+    from unittest.mock import patch
+    from scripts.monitor import discover_phases
+
+    with patch("subprocess.check_output", return_value="") as mock_ssh:
+        discover_phases(tmp_path / "results", remote_host="my-server")
+
+    cmd = mock_ssh.call_args[0][0]
+    assert cmd[1] == "my-server"
+
+
+def test_discover_phases_local_ignores_remote_host(tmp_path):
+    """discover_phases without remote_host uses local filesystem, not SSH."""
+    from scripts.monitor import discover_phases
+
+    (tmp_path / "resilience").mkdir()
+    (tmp_path / "slicing").mkdir()
+
+    phases = discover_phases(tmp_path, remote_host=None)
+    assert "resilience" in phases
+    assert "slicing" in phases
