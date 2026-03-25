@@ -75,6 +75,24 @@ def get_funnel_grace() -> float:
     return float(os.environ.get("FUNNEL_GRACE", "5.0"))
 
 
+def get_funnel_bypass_replace() -> bool:
+    """Read the FUNNEL_BYPASS_REPLACE flag from the environment.
+
+    When True, _replace_failed_stages() skips re-placement for stages that
+    are predecessors of fan-in (funnel) stages. This lets the dead worker
+    remain in the placement map so that _find_ready_stages can detect it
+    and invoke apply_funnel_policy with the actual funnel mode.
+
+    Without this flag, the health-check recovery re-places dead workers
+    before the funnel policy is consulted, making all three funnel modes
+    produce identical results.
+
+    Returns False if the env var is not set (backward compatible).
+    """
+    raw = os.environ.get("FUNNEL_BYPASS_REPLACE", "false")
+    return raw.lower() in ("true", "1", "yes")
+
+
 def get_funnel_mode() -> FunnelMode:
     """Read the funnel resilience mode from the FUNNEL_MODE env var.
 
@@ -83,6 +101,29 @@ def get_funnel_mode() -> FunnelMode:
     """
     raw = os.environ.get("FUNNEL_MODE", "wait")
     return FunnelMode(raw.lower())
+
+
+def find_funnel_predecessor_stages(dag) -> set[str]:
+    """Return stage IDs that are predecessors of fan-in (funnel) stages.
+
+    A fan-in stage has more than one predecessor. This function returns
+    all stages that feed into any fan-in stage. These are the stages
+    whose re-placement should be skipped when FUNNEL_BYPASS_REPLACE is
+    active, so that the funnel policy can detect dead predecessors.
+
+    Args:
+        dag: A PipelineDAG instance with .stages and .predecessors().
+
+    Returns:
+        Set of stage IDs that are predecessors of at least one fan-in stage.
+    """
+    funnel_preds: set[str] = set()
+    for stage_id in dag.stages:
+        preds = dag.predecessors(stage_id)
+        if len(preds) > 1:
+            # This is a fan-in stage; all its predecessors are funnel predecessors
+            funnel_preds.update(preds)
+    return funnel_preds
 
 
 def apply_funnel_policy(

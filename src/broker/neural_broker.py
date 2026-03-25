@@ -522,9 +522,21 @@ class NeuralBroker:
         the placement and dispatches the re-placed stages. If it fails, marks
         the pipeline as failed.
 
+        When FUNNEL_BYPASS_REPLACE is active, stages that are predecessors of
+        fan-in (funnel) stages are NOT re-placed. This lets the dead worker
+        remain in the placement map so that _find_ready_stages can detect it
+        and invoke apply_funnel_policy with the actual funnel mode.
+
         Args:
             dead_node_id: The node_id of the dead worker.
         """
+        from src.broker.funnel_resilience import (
+            find_funnel_predecessor_stages,
+            get_funnel_bypass_replace,
+        )
+
+        bypass = get_funnel_bypass_replace()
+
         # Collect affected pipelines under lock
         async with self._pipelines_lock:
             affected: list[PipelineState] = [
@@ -546,37 +558,52 @@ class NeuralBroker:
             if not dead_stages:
                 continue
 
+            # When bypass is active, exclude stages that are predecessors of
+            # fan-in stages from re-placement.
+            if bypass:
+                funnel_preds = find_funnel_predecessor_stages(ps.dag)
+                stages_to_replace = [
+                    sid for sid in dead_stages if sid not in funnel_preds
+                ]
+            else:
+                stages_to_replace = dead_stages
+
             # --- Re-placement strategy ---
             # Invoke the full DAG placement solver (find_placement) on the
             # *complete* DAG, not just the failed stages.  This is necessary
             # because the solver requires the full graph topology (edges,
             # latency bounds, sovereignty labels) to produce a feasible
-            # assignment.  Only the assignments for `dead_stages` are
+            # assignment.  Only the assignments for `stages_to_replace` are
             # extracted from the result; all other stages keep their current
             # placement.  Passing a partial sub-graph would require
             # constraint-preserving extraction (future work).
             replaced = False
-            async with self._workers_lock:
-                if self._topology.nodes:
-                    try:
-                        new_placement = find_placement(
-                            dag=ps.dag,
-                            topology=self._topology,
-                            governance=self._governance,
-                            alpha=self.config.alpha,
-                            beta=self.config.beta,
-                            gamma=self.config.gamma,
-                        )
-                        # Cherry-pick only the dead stages from the new solution.
-                        for sid in dead_stages:
-                            ps.placement[sid] = new_placement[sid]
-                        replaced = True
-                    except RuntimeError as exc:
-                        logger.warning(
-                            "Re-placement failed for pipeline '%s': %s",
-                            ps.pipeline_id,
-                            exc,
-                        )
+            if stages_to_replace:
+                async with self._workers_lock:
+                    if self._topology.nodes:
+                        try:
+                            new_placement = find_placement(
+                                dag=ps.dag,
+                                topology=self._topology,
+                                governance=self._governance,
+                                alpha=self.config.alpha,
+                                beta=self.config.beta,
+                                gamma=self.config.gamma,
+                            )
+                            # Cherry-pick only the stages to replace from the new solution.
+                            for sid in stages_to_replace:
+                                ps.placement[sid] = new_placement[sid]
+                            replaced = True
+                        except RuntimeError as exc:
+                            logger.warning(
+                                "Re-placement failed for pipeline '%s': %s",
+                                ps.pipeline_id,
+                                exc,
+                            )
+            else:
+                # All dead stages are funnel predecessors and bypass is active;
+                # nothing to re-place, but this is intentional (not a failure).
+                replaced = True
 
             if replaced:
                 logger.info(

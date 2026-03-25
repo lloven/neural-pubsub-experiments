@@ -686,3 +686,331 @@ class TestFunnelDispatchIntegration:
         assert "_find_ready_stages" in source, (
             "NeuralBroker._dispatch_ready_stages must call _find_ready_stages"
         )
+
+
+# ---------------------------------------------------------------------------
+# 11. FUNNEL_BYPASS_REPLACE: prevent re-placement from masking funnel policy
+# ---------------------------------------------------------------------------
+
+class TestFunnelBypassReplace:
+    """When FUNNEL_BYPASS_REPLACE=true, _replace_failed_stages must skip
+    re-placement for stages that are predecessors of fan-in (funnel) stages.
+    This lets dead workers remain in the placement map so _find_ready_stages
+    can detect them and invoke apply_funnel_policy.
+
+    Without bypass, the health-check loop re-places dead workers before
+    the funnel policy is consulted, making all three funnel modes (wait,
+    proceed, abort) produce identical results.
+    """
+
+    # -- Test 1: env var reader --
+
+    def test_get_funnel_bypass_replace_reads_env(self):
+        """get_funnel_bypass_replace() must read FUNNEL_BYPASS_REPLACE env var."""
+        import os
+        from src.broker.funnel_resilience import get_funnel_bypass_replace
+
+        old = os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+        try:
+            assert get_funnel_bypass_replace() is False, (
+                "Default should be False when env var is not set"
+            )
+            os.environ["FUNNEL_BYPASS_REPLACE"] = "true"
+            assert get_funnel_bypass_replace() is True
+            os.environ["FUNNEL_BYPASS_REPLACE"] = "false"
+            assert get_funnel_bypass_replace() is False
+            os.environ["FUNNEL_BYPASS_REPLACE"] = "1"
+            assert get_funnel_bypass_replace() is True
+        finally:
+            if old is not None:
+                os.environ["FUNNEL_BYPASS_REPLACE"] = old
+            else:
+                os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 2: bypass skips replacement for funnel predecessors --
+
+    def test_bypass_replace_skips_funnel_predecessors(self):
+        """With FUNNEL_BYPASS_REPLACE=true, _replace_failed_stages must NOT
+        re-place stages that are predecessors of a fan-in stage. The dead
+        worker stays in the placement map."""
+        import asyncio
+        import os
+        from src.broker.models import PipelineState
+        from src.pipeline.patterns import sensor_fusion_pipeline
+
+        os.environ["FUNNEL_BYPASS_REPLACE"] = "true"
+        try:
+            from src.broker.static_broker import StaticBroker
+
+            broker = StaticBroker(
+                domain_id="d1", broker_id="test-broker",
+                placement="round_robin",
+            )
+            # Register two live workers
+            from src.broker.models import WorkerInfo
+            broker._workers = {
+                "worker-a": WorkerInfo(
+                    node_id="worker-a", domain_id="d1", slice_id="embb",
+                    capacity=10.0, url="http://localhost:8081",
+                ),
+                "worker-b": WorkerInfo(
+                    node_id="worker-b", domain_id="d1", slice_id="embb",
+                    capacity=10.0, url="http://localhost:8082",
+                ),
+            }
+            broker._rebuild_cycle()
+
+            dag = sensor_fusion_pipeline(n_sensors=3)
+            ps = PipelineState(
+                pipeline_id="test-bypass",
+                pipeline_type="sensor_fusion",
+                dag=dag,
+                placement={
+                    "sensor_0": "worker-a",
+                    "sensor_1": "worker-b",
+                    "sensor_2": "worker-dead",  # dead worker, predecessor of fuse
+                    "fuse": "worker-a",
+                    "decide": "worker-b",
+                },
+            )
+            ps.completed_stages = {"sensor_0", "sensor_1"}
+            broker._active_pipelines = {ps.pipeline_id: ps}
+
+            # Run _replace_failed_stages for the dead worker
+            asyncio.get_event_loop().run_until_complete(
+                broker._replace_failed_stages("worker-dead")
+            )
+
+            # sensor_2 is a predecessor of fuse (fan-in), so it must NOT
+            # have been re-placed; it should still point to worker-dead
+            assert ps.placement["sensor_2"] == "worker-dead", (
+                f"With bypass=true, sensor_2 (funnel predecessor) should NOT "
+                f"be re-placed but got: {ps.placement['sensor_2']}"
+            )
+        finally:
+            os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 3: without bypass, replacement still works (regression) --
+
+    def test_normal_mode_still_replaces(self):
+        """With FUNNEL_BYPASS_REPLACE=false (default), _replace_failed_stages
+        must still re-place dead workers normally (regression test)."""
+        import asyncio
+        import os
+        from src.broker.models import PipelineState, WorkerInfo
+        from src.pipeline.patterns import sensor_fusion_pipeline
+
+        os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+        try:
+            from src.broker.static_broker import StaticBroker
+
+            broker = StaticBroker(
+                domain_id="d1", broker_id="test-broker",
+                placement="round_robin",
+            )
+            broker._workers = {
+                "worker-a": WorkerInfo(
+                    node_id="worker-a", domain_id="d1", slice_id="embb",
+                    capacity=10.0, url="http://localhost:8081",
+                ),
+                "worker-b": WorkerInfo(
+                    node_id="worker-b", domain_id="d1", slice_id="embb",
+                    capacity=10.0, url="http://localhost:8082",
+                ),
+            }
+            broker._rebuild_cycle()
+
+            dag = sensor_fusion_pipeline(n_sensors=3)
+            ps = PipelineState(
+                pipeline_id="test-no-bypass",
+                pipeline_type="sensor_fusion",
+                dag=dag,
+                placement={
+                    "sensor_0": "worker-a",
+                    "sensor_1": "worker-b",
+                    "sensor_2": "worker-dead",
+                    "fuse": "worker-a",
+                    "decide": "worker-b",
+                },
+            )
+            ps.completed_stages = {"sensor_0", "sensor_1"}
+            broker._active_pipelines = {ps.pipeline_id: ps}
+
+            asyncio.get_event_loop().run_until_complete(
+                broker._replace_failed_stages("worker-dead")
+            )
+
+            # Without bypass, sensor_2 should be re-placed to a live worker
+            assert ps.placement["sensor_2"] != "worker-dead", (
+                f"Without bypass, sensor_2 should be re-placed but still "
+                f"points to: {ps.placement['sensor_2']}"
+            )
+        finally:
+            os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 4: wait mode + bypass stalls then timeout --
+
+    def test_funnel_wait_with_bypass_stalls_then_timeout(self):
+        """With bypass=true and wait mode, the dead predecessor is NOT
+        re-placed, so _find_ready_stages detects it and the funnel policy
+        stalls. After timeout, the pipeline fails with funnel_timeout."""
+        import os
+        import time
+        from src.broker.base import BaseBroker
+        from src.broker.models import PipelineState
+        from src.pipeline.patterns import sensor_fusion_pipeline
+
+        os.environ["FUNNEL_MODE"] = "wait"
+        os.environ["FUNNEL_BYPASS_REPLACE"] = "true"
+        try:
+            dag = sensor_fusion_pipeline(n_sensors=3)
+            ps = PipelineState(
+                pipeline_id="test-wait-bypass",
+                pipeline_type="sensor_fusion",
+                dag=dag,
+                placement={
+                    "sensor_0": "worker-a",
+                    "sensor_1": "worker-b",
+                    "sensor_2": "worker-dead",
+                    "fuse": "worker-a",
+                    "decide": "worker-b",
+                },
+            )
+            ps.completed_stages = {"sensor_0", "sensor_1"}
+            dead = {"worker-dead"}
+
+            # First call: should stall
+            ready, funnel_result = BaseBroker._find_ready_stages(
+                ps, dead_workers=dead,
+            )
+            assert "fuse" not in ready
+            assert funnel_result is not None
+            assert funnel_result.action == "wait"
+
+            # Simulate timeout
+            ps.funnel_wait_start = time.time() - 999
+            ready2, funnel_result2 = BaseBroker._find_ready_stages(
+                ps, dead_workers=dead,
+            )
+            assert funnel_result2 is not None
+            assert funnel_result2.action == "fail"
+            assert funnel_result2.pipeline_failed is True
+        finally:
+            os.environ.pop("FUNNEL_MODE", None)
+            os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 5: proceed mode + bypass produces partial --
+
+    def test_funnel_proceed_with_bypass_produces_partial(self):
+        """With bypass=true and proceed mode, the dead predecessor is NOT
+        re-placed, so the funnel policy proceeds with partial=True."""
+        import os
+        from src.broker.base import BaseBroker
+        from src.broker.models import PipelineState
+        from src.pipeline.patterns import sensor_fusion_pipeline
+
+        os.environ["FUNNEL_MODE"] = "proceed"
+        os.environ["FUNNEL_BYPASS_REPLACE"] = "true"
+        try:
+            dag = sensor_fusion_pipeline(n_sensors=3)
+            ps = PipelineState(
+                pipeline_id="test-proceed-bypass",
+                pipeline_type="sensor_fusion",
+                dag=dag,
+                placement={
+                    "sensor_0": "worker-a",
+                    "sensor_1": "worker-b",
+                    "sensor_2": "worker-dead",
+                    "fuse": "worker-a",
+                    "decide": "worker-b",
+                },
+            )
+            ps.completed_stages = {"sensor_0", "sensor_1"}
+            dead = {"worker-dead"}
+
+            ready, funnel_result = BaseBroker._find_ready_stages(
+                ps, dead_workers=dead,
+            )
+            assert "fuse" in ready, (
+                "Proceed mode with bypass should make fuse ready"
+            )
+            assert funnel_result is not None
+            assert funnel_result.partial is True
+            assert ps.partial is True
+        finally:
+            os.environ.pop("FUNNEL_MODE", None)
+            os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 6: abort mode + bypass fails immediately --
+
+    def test_funnel_abort_with_bypass_fails_immediately(self):
+        """With bypass=true and abort mode, the dead predecessor is NOT
+        re-placed, so the funnel policy aborts immediately."""
+        import os
+        from src.broker.base import BaseBroker
+        from src.broker.models import PipelineState
+        from src.pipeline.patterns import sensor_fusion_pipeline
+
+        os.environ["FUNNEL_MODE"] = "abort"
+        os.environ["FUNNEL_BYPASS_REPLACE"] = "true"
+        try:
+            dag = sensor_fusion_pipeline(n_sensors=3)
+            ps = PipelineState(
+                pipeline_id="test-abort-bypass",
+                pipeline_type="sensor_fusion",
+                dag=dag,
+                placement={
+                    "sensor_0": "worker-a",
+                    "sensor_1": "worker-b",
+                    "sensor_2": "worker-dead",
+                    "fuse": "worker-a",
+                    "decide": "worker-b",
+                },
+            )
+            ps.completed_stages = {"sensor_0", "sensor_1"}
+            dead = {"worker-dead"}
+
+            ready, funnel_result = BaseBroker._find_ready_stages(
+                ps, dead_workers=dead,
+            )
+            assert "fuse" not in ready
+            assert funnel_result is not None
+            assert funnel_result.action == "abort"
+            assert funnel_result.pipeline_failed is True
+        finally:
+            os.environ.pop("FUNNEL_MODE", None)
+            os.environ.pop("FUNNEL_BYPASS_REPLACE", None)
+
+    # -- Test 7: funnel configs set FUNNEL_BYPASS_REPLACE=true --
+
+    def test_funnel_configs_set_bypass(self):
+        """The funnel configs (funnel-wait, funnel-proceed, funnel-abort) in
+        run_resilience must set FUNNEL_BYPASS_REPLACE in the env dict."""
+        import inspect
+        from scripts.run_resilience import CONFIGS, _run
+
+        # Check the _run function source sets FUNNEL_BYPASS_REPLACE
+        source = inspect.getsource(_run)
+        assert "FUNNEL_BYPASS_REPLACE" in source, (
+            "_run() must set FUNNEL_BYPASS_REPLACE for funnel configs"
+        )
+
+        # Also verify the config dicts contain the bypass flag
+        for cfg_name in ("funnel-wait", "funnel-proceed", "funnel-abort"):
+            cfg = CONFIGS[cfg_name]
+            assert cfg.get("funnel_bypass_replace") == "true", (
+                f"{cfg_name} must set funnel_bypass_replace='true'"
+            )
+
+    # -- Test 8: non-funnel configs do NOT set bypass --
+
+    def test_non_funnel_configs_no_bypass(self):
+        """The non-funnel configs (embb-kill, urllc-kill) must NOT set
+        FUNNEL_BYPASS_REPLACE (they use normal health-check recovery)."""
+        from scripts.run_resilience import CONFIGS
+
+        for cfg_name in ("embb-kill", "urllc-kill"):
+            cfg = CONFIGS[cfg_name]
+            assert "funnel_bypass_replace" not in cfg, (
+                f"{cfg_name} must NOT set funnel_bypass_replace"
+            )

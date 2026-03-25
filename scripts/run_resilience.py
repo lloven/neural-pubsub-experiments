@@ -55,11 +55,14 @@ CONFIGS = {
     # Target: worker-d1-urllc-2 (distinct from embb-kill/urllc-kill targets).
     # pipeline_mix_fusion=1.0 ensures only sensor_fusion pipelines are submitted.
     "funnel-wait": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
-            "funnel_mode": "wait", "pipeline_mix_fusion": "1.0"},
+            "funnel_mode": "wait", "pipeline_mix_fusion": "1.0",
+            "funnel_bypass_replace": "true"},
     "funnel-proceed": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
-            "funnel_mode": "proceed", "pipeline_mix_fusion": "1.0"},
+            "funnel_mode": "proceed", "pipeline_mix_fusion": "1.0",
+            "funnel_bypass_replace": "true"},
     "funnel-abort": {"failure_type": "worker", "failure_target": "worker-d1-urllc-2",
-            "funnel_mode": "abort", "pipeline_mix_fusion": "1.0"},
+            "funnel_mode": "abort", "pipeline_mix_fusion": "1.0",
+            "funnel_bypass_replace": "true"},
 }
 
 # Placement strategies (mirrors baseline naming: S1=round-robin, S2=random, S3=neural).
@@ -223,6 +226,12 @@ def _run(run: RunConfig, dry_run: bool) -> dict:
     funnel_mode = cfg.get("funnel_mode")
     if funnel_mode is not None:
         env["FUNNEL_MODE"] = funnel_mode
+
+    # Funnel bypass replace: skip re-placement for funnel predecessors so
+    # the funnel policy actually engages (see funnel_resilience.py docstring).
+    funnel_bypass = cfg.get("funnel_bypass_replace")
+    if funnel_bypass is not None:
+        env["FUNNEL_BYPASS_REPLACE"] = funnel_bypass
 
     # Resilience uses the failure compose overlay to disable restart: unless-stopped.
     # Without this, Docker auto-restarts killed containers, making injection invisible.

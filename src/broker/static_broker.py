@@ -210,7 +210,19 @@ class StaticBroker(BaseBroker):
 
         Same recovery mechanism as NeuralBroker, but uses round-robin/random
         for re-placement instead of the neural placement solver.
+
+        When FUNNEL_BYPASS_REPLACE is active, stages that are predecessors of
+        fan-in (funnel) stages are NOT re-placed. This lets the dead worker
+        remain in the placement map so that _find_ready_stages can detect it
+        and invoke apply_funnel_policy with the actual funnel mode.
         """
+        from src.broker.funnel_resilience import (
+            find_funnel_predecessor_stages,
+            get_funnel_bypass_replace,
+        )
+
+        bypass = get_funnel_bypass_replace()
+
         async with self._pipelines_lock:
             affected: list[PipelineState] = [
                 ps
@@ -228,15 +240,30 @@ class StaticBroker(BaseBroker):
             if not dead_stages:
                 continue
 
+            # When bypass is active, exclude stages that are predecessors of
+            # fan-in stages from re-placement.
+            if bypass:
+                funnel_preds = find_funnel_predecessor_stages(ps.dag)
+                stages_to_replace = [
+                    sid for sid in dead_stages if sid not in funnel_preds
+                ]
+            else:
+                stages_to_replace = dead_stages
+
             replaced = False
-            async with self._workers_lock:
-                if self._workers:
-                    try:
-                        for sid in dead_stages:
-                            ps.placement[sid] = self._pick_worker()
-                        replaced = True
-                    except RuntimeError:
-                        pass
+            if stages_to_replace:
+                async with self._workers_lock:
+                    if self._workers:
+                        try:
+                            for sid in stages_to_replace:
+                                ps.placement[sid] = self._pick_worker()
+                            replaced = True
+                        except RuntimeError:
+                            pass
+            else:
+                # All dead stages are funnel predecessors and bypass is active;
+                # nothing to re-place, but this is intentional (not a failure).
+                replaced = True  # Don't trigger the failure path
 
             if replaced:
                 logger.info(
