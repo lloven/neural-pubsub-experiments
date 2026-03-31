@@ -393,8 +393,10 @@ CONFIG_MAP = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-VM experiment runner")
-    parser.add_argument("--config", required=True, choices=list(CONFIG_MAP.keys()))
-    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--stop", action="store_true",
+                        help="Stop all containers on all VMs and exit")
+    parser.add_argument("--config", default=None, choices=list(CONFIG_MAP.keys()))
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--deploy-image", action="store_true", help="Build and push Docker image first")
     parser.add_argument("--warmup", type=int, default=240)
@@ -403,6 +405,14 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.stop:
+        logger.info("Stopping all containers on all VMs...")
+        stop_cluster(dry_run=args.dry_run)
+        return
+
+    if not args.config or args.seed is None:
+        parser.error("--config and --seed are required (unless --stop)")
 
     if args.deploy_image:
         deploy_image(dry_run=args.dry_run)

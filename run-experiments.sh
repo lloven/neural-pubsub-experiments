@@ -301,10 +301,13 @@ single)
 # --- Stop all containers -----------------------------------------------------
 stop)
     info "Stopping all containers ..."
+    # Stop local Docker Compose stacks
     rcmd "docker compose -f docker-compose.local.yaml down --remove-orphans" 2>/dev/null || true
     rcmd "docker compose -f docker-compose.local.yaml -f docker-compose.kafka.yaml down --remove-orphans" 2>/dev/null || true
     rcmd "docker compose -f docker-compose.local.yaml -f docker-compose.flat.yaml down --remove-orphans" 2>/dev/null || true
     rcmd "docker compose -f docker-compose.local.yaml -f docker-compose.governance.yaml down --remove-orphans" 2>/dev/null || true
+    # Stop distributed 4-VM cluster
+    python3 -m scripts.multi_vm_runner --stop 2>/dev/null || true
     ok "All stopped."
     ;;
 
