@@ -184,7 +184,7 @@ def build_run_matrix(
     return runs
 
 
-def _run(run: RunConfig, dry_run: bool) -> dict:
+def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     mix = COMPLEXITIES[run.pipeline_complexity]

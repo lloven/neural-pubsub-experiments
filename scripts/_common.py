@@ -649,6 +649,8 @@ def phase_main(
     )
     parser.add_argument("--dry-run", action="store_true", help="Print runs without executing")
     parser.add_argument("--resume", action="store_true", help="Skip runs already completed (reads .progress.json)")
+    parser.add_argument("--topology", default="local", choices=["local", "distributed"],
+                        help="Run on local Docker or distributed 4-VM cluster (default: local)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING"])
 
     if extra_args_fn is not None:
@@ -734,7 +736,7 @@ def phase_main(
         _update_progress(results_dir, progress, run_id, "running")
 
         try:
-            result = run_fn(run, args.dry_run)
+            result = run_fn(run, args.dry_run, topology=args.topology)
             status = "done" if result["status"] == "completed" else result["status"]
             _update_progress(results_dir, progress, run_id, status,
                            detail=result.get("result_file", ""))

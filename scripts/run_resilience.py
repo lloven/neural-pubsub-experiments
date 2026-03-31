@@ -179,7 +179,7 @@ def _make_failure_fn(
         raise ValueError(f"Unknown failure type: {run.failure_type}")
 
 
-def _run(run: RunConfig, dry_run: bool) -> dict:
+def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     # Must match run_single's normalization: lowercase + replace _ with -

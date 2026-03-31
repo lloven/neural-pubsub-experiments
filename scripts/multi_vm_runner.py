@@ -59,7 +59,7 @@ except ImportError:
     pass
 
 DEPLOY_DIR = Path(__file__).parent.parent / "deploy"
-RESULTS_DIR = Path(__file__).parent.parent / "results" / "market"
+RESULTS_BASE = Path(__file__).parent.parent / "results"
 REMOTE_PROJECT_DIR = "~/neural-pubsub"
 
 # ---------------------------------------------------------------------------
@@ -89,6 +89,45 @@ def teardown_wan_emulation(vm2: VMConfig, vm3: VMConfig, dry_run: bool = False) 
     """Remove tc qdisc rules."""
     for vm in [vm2, vm3]:
         _ssh(vm.ssh_host, "sudo tc qdisc del dev eth0 root 2>/dev/null || true", dry_run=dry_run)
+
+# ---------------------------------------------------------------------------
+# Failure injection (SSH-based, no sudo needed)
+# ---------------------------------------------------------------------------
+
+def inject_remote_kill(
+    vm: VMConfig,
+    container: str,
+    delay_s: int = 0,
+    dry_run: bool = False,
+) -> None:
+    """Kill a container on a remote VM via SSH.
+
+    Sleeps delay_s seconds, then runs docker kill. Designed to be called
+    in a daemon thread from run_single().
+    """
+    if delay_s > 0 and not dry_run:
+        import time
+        time.sleep(delay_s)
+    _ssh(vm.ssh_host, f"docker kill {container}", dry_run=dry_run)
+
+
+def inject_remote_partition(
+    vm_src: VMConfig,
+    vm_dst: VMConfig,
+    delay_s: int = 0,
+    dry_run: bool = False,
+) -> None:
+    """Simulate a network partition by stopping the broker on vm_dst.
+
+    Uses docker stop (no sudo needed) to make vm_dst's broker unreachable
+    from vm_src's perspective. This is a coarse partition (full broker down)
+    rather than a selective network drop.
+    """
+    if delay_s > 0 and not dry_run:
+        import time
+        time.sleep(delay_s)
+    _ssh(vm_dst.ssh_host, "docker stop deploy-broker-1", dry_run=dry_run)
+
 
 # ---------------------------------------------------------------------------
 # SSH helpers
@@ -145,18 +184,28 @@ def deploy_image(dry_run: bool = False) -> None:
 def start_cluster(
     placement_mode: str = "market",
     governance_config: str = "all",
+    broker_module: str | None = None,
+    placement: str | None = None,
+    extra_env: dict[str, str] | None = None,
     dry_run: bool = False,
 ) -> None:
     """Start compose stacks on all VMs."""
     for vm in VMS:
-        # Determine governance for this VM based on config
         gov_enabled = _governance_for_vm(vm, governance_config)
 
-        env_overrides = (
-            f"PLACEMENT_MODE={placement_mode} "
-            f"GOVERNANCE_ENABLED={gov_enabled} "
-            f"VM_IP={vm.ip}"
-        )
+        env_parts = [
+            f"PLACEMENT_MODE={placement_mode}",
+            f"GOVERNANCE_ENABLED={gov_enabled}",
+            f"VM_IP={vm.ip}",
+        ]
+        if broker_module:
+            env_parts.append(f"BROKER_MODULE={broker_module}")
+        if placement:
+            env_parts.append(f"PLACEMENT={placement}")
+        if extra_env:
+            env_parts.extend(f"{k}={v}" for k, v in extra_env.items())
+
+        env_overrides = " ".join(env_parts)
         cmd = (
             f"cd {REMOTE_PROJECT_DIR} && "
             f"{env_overrides} "
@@ -220,14 +269,15 @@ def wait_for_federation(timeout_s: int = 120, dry_run: bool = False) -> bool:
     return False
 
 
-def collect_results(run_id: str, dry_run: bool = False) -> None:
+def collect_results(run_id: str, results_subdir: str = "market", dry_run: bool = False) -> None:
     """Rsync results from all VMs to local results directory."""
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    results_dir = RESULTS_BASE / results_subdir
+    results_dir.mkdir(parents=True, exist_ok=True)
     for vm in VMS:
         _rsync(
             vm.ssh_host,
             f"{REMOTE_PROJECT_DIR}/results/",
-            str(RESULTS_DIR / run_id / vm.name) + "/",
+            str(results_dir / run_id / vm.name) + "/",
             dry_run=dry_run,
         )
 
@@ -239,17 +289,33 @@ def run_single(
     governance_config: str,
     warmup_s: int = 240,
     measurement_s: int = 600,
+    broker_module: str | None = None,
+    placement: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    workload_env: dict[str, str] | None = None,
+    results_subdir: str = "market",
+    failure_fn: object | None = None,
+    wan_emulation: bool = True,
     dry_run: bool = False,
 ) -> None:
-    """Execute a single experiment run."""
+    """Execute a single experiment run on the 4-VM cluster."""
     run_id = f"{config}_seed-{seed}"
-    logger.info("=== Run: %s (placement=%s, governance=%s) ===", run_id, placement_mode, governance_config)
+    logger.info("=== Run: %s (placement=%s, governance=%s, broker=%s) ===",
+                run_id, placement_mode, governance_config,
+                broker_module or "neural_broker")
 
     # 1. Start cluster
-    start_cluster(placement_mode, governance_config, dry_run=dry_run)
+    start_cluster(
+        placement_mode, governance_config,
+        broker_module=broker_module,
+        placement=placement,
+        extra_env=extra_env,
+        dry_run=dry_run,
+    )
 
-    # 2. Setup WAN emulation
-    setup_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
+    # 2. Setup WAN emulation (skip if no sudo or explicitly disabled)
+    if wan_emulation:
+        setup_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
 
     # 3. Wait for federation
     if not wait_for_federation(dry_run=dry_run):
@@ -257,13 +323,24 @@ def run_single(
         stop_cluster(dry_run=dry_run)
         return
 
-    # 4. Start workload on VM1 via Docker (blocks until done)
+    # 4. Start failure injection if configured (runs in background thread)
+    if failure_fn and not dry_run:
+        import threading
+        t = threading.Thread(target=failure_fn, daemon=True)
+        t.start()
+
+    # 5. Start workload on VM1 via Docker (blocks until done)
+    env_flags = ""
+    if workload_env:
+        env_flags = " ".join(f"-e {k}={v}" for k, v in workload_env.items()) + " "
+
     workload_cmd = (
         f"cd {REMOTE_PROJECT_DIR} && "
-        f"mkdir -p results/market && "
+        f"mkdir -p results/{results_subdir} && "
         f"docker run --rm --network=host "
         f"--entrypoint python3 "
-        f"-v $PWD/results/market:/results "
+        f"{env_flags}"
+        f"-v $PWD/results/{results_subdir}:/results "
         f"neural-pubsub:latest "
         f"-m src.workload.generator "
         f"--broker-url http://localhost:8080 "
@@ -274,11 +351,12 @@ def run_single(
     )
     _ssh(VMS[0].ssh_host, workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
 
-    # 5. Collect results
-    collect_results(run_id, dry_run=dry_run)
+    # 6. Collect results
+    collect_results(run_id, results_subdir=results_subdir, dry_run=dry_run)
 
-    # 6. Teardown
-    teardown_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
+    # 7. Teardown
+    if wan_emulation:
+        teardown_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
     stop_cluster(dry_run=dry_run)
 
     logger.info("=== Completed: %s ===", run_id)
@@ -288,13 +366,21 @@ def run_single(
 # ---------------------------------------------------------------------------
 
 CONFIG_MAP = {
-    # Allocation strategies (all use gov-all by default)
-    "oracle-global":   {"placement": "oracle",       "governance": "all"},
+    # --- Baseline strategies (S1/S2/S3) ---
+    "round-robin":     {"placement": "neural", "governance": "none",
+                        "broker_module": "src.broker.static_broker",
+                        "static_placement": "round_robin"},
+    "random":          {"placement": "neural", "governance": "none",
+                        "broker_module": "src.broker.static_broker",
+                        "static_placement": "random"},
+    "neural":          {"placement": "neural", "governance": "none"},
+    # --- Market/allocation strategies ---
+    "oracle-global":   {"placement": "oracle",        "governance": "all"},
     "market-quad":     {"placement": "market",        "governance": "all"},
     "locality-only":   {"placement": "locality",      "governance": "all"},
     "latency-greedy":  {"placement": "latency_greedy", "governance": "all"},
     "spillover":       {"placement": "spillover",     "governance": "all"},
-    # Governance composition (all use market placement)
+    # --- Governance composition ---
     "gov-none":        {"placement": "market", "governance": "none"},
     "gov-edge-only":   {"placement": "market", "governance": "edge-only"},
     "gov-cloud-only":  {"placement": "market", "governance": "cloud-only"},
@@ -327,8 +413,11 @@ def main() -> None:
         seed=args.seed,
         placement_mode=cfg["placement"],
         governance_config=cfg["governance"],
+        broker_module=cfg.get("broker_module"),
+        placement=cfg.get("static_placement"),
         warmup_s=args.warmup,
         measurement_s=args.measurement,
+        wan_emulation=False,  # requires sudo; enable when available
         dry_run=args.dry_run,
     )
 

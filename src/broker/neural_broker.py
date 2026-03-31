@@ -1651,7 +1651,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summary-interval",
         type=float,
-        default=10.0,
+        default=float(os.environ.get("FEDERATION_INTERVAL_S", "10.0")),
         dest="summary_interval_s",
         help="Summary propagation interval in seconds (delta_prop).",
     )

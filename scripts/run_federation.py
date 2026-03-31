@@ -116,7 +116,7 @@ def build_run_matrix(
     return runs
 
 
-def _run(run: RunConfig, dry_run: bool) -> dict:
+def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
     run_id = f"{run.config_name}_rate-medium_seed-{run.seed}"
     total_duration = run.warmup_s + run.measurement_s
 
