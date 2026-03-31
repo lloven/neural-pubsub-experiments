@@ -113,7 +113,54 @@ def build_run_matrix(
     return runs
 
 
+def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
+    """Execute a slicing run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+    from functools import partial as _partial
+
+    run_id = run.run_id
+    cmap = _COMPOSE_MAP[run.config_name]
+    placement = cmap["env"].get("PLACEMENT", "neural")
+
+    failure_fn = None
+    if run.failure_injection:
+        failure_fn = _partial(
+            multi_vm_runner.inject_remote_kill,
+            vm=multi_vm_runner.VMS[0],
+            container="deploy-worker-0-1",
+            delay_s=run.failure_delay_s,
+        )
+
+    gov_config = "all" if run.governance else "none"
+
+    multi_vm_runner.run_single(
+        config=run_id,
+        seed=run.seed,
+        placement_mode=placement if placement != "round_robin" else "neural",
+        governance_config=gov_config,
+        broker_module=cmap["env"].get("BROKER_MODULE"),
+        placement=cmap["env"].get("PLACEMENT") if cmap["env"].get("BROKER_MODULE") else None,
+        workload_env={
+            "PIPELINE_MIX_CQI": str(COMPLEXITY_MIX["cqi_prediction"]),
+            "PIPELINE_MIX_ANOMALY": str(COMPLEXITY_MIX["anomaly_detection"]),
+            "PIPELINE_MIX_FUSION": str(COMPLEXITY_MIX["sensor_fusion"]),
+        },
+        results_subdir="slicing",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        failure_fn=failure_fn,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/slicing/{run_id}.csv"}
+
+
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_distributed(run, dry_run)
+
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
 

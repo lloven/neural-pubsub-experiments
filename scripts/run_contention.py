@@ -104,8 +104,50 @@ def build_contention_matrix(
     return runs
 
 
+def _run_contention_distributed(run: ContentionRunConfig, dry_run: bool) -> dict:
+    """Execute a contention run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+    from functools import partial
+
+    run_id = f"{run.config_name}_seed-{run.seed}"
+
+    failure_fn = None
+    if run.failure == FAILURE_KILL_WORKERS:
+        failure_fn = partial(
+            multi_vm_runner.inject_remote_kill,
+            vm=multi_vm_runner.VMS[0],
+            container="deploy-worker-0-1",
+            delay_s=run.failure_delay_s,
+        )
+
+    multi_vm_runner.run_single(
+        config=run_id,
+        seed=run.seed,
+        placement_mode="neural",
+        governance_config="none",
+        workload_env={
+            "ARRIVAL_RATE": str(run.arrival_rate),
+            "PIPELINE_MIX_CQI": "0.34",
+            "PIPELINE_MIX_ANOMALY": "0.33",
+            "PIPELINE_MIX_FUSION": "0.33",
+        },
+        results_subdir="contention",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        failure_fn=failure_fn,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/contention/{run_id}.csv"}
+
+
 def _run_contention(run: ContentionRunConfig, dry_run: bool, **kwargs) -> dict:
     """Execute one contention run."""
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_contention_distributed(run, dry_run)
+
     run_id = f"{run.config_name}_seed-{run.seed}"
     total_duration = run.warmup_s + run.measurement_s
 

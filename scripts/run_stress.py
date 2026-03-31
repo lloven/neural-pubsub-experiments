@@ -133,8 +133,48 @@ def build_run_matrix(
     return runs
 
 
+def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
+    """Execute a stress run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+    from functools import partial as _partial
+
+    run_id = run.run_id
+    strat_env = _strategy_env(run.strategy)
+
+    failure_fn = None
+    if run.failure_target is not None:
+        failure_fn = _partial(
+            multi_vm_runner.inject_remote_kill,
+            vm=multi_vm_runner.VMS[0],
+            container="deploy-worker-0-1",
+            delay_s=run.failure_delay_s,
+        )
+
+    multi_vm_runner.run_single(
+        config=run_id,
+        seed=run.seed,
+        placement_mode=strat_env.get("PLACEMENT_STRATEGY", "neural"),
+        governance_config="all",
+        broker_module=strat_env.get("BROKER_MODULE"),
+        placement=strat_env.get("PLACEMENT"),
+        workload_env={"ARRIVAL_RATE": str(run.arrival_rate)},
+        results_subdir="stress",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        failure_fn=failure_fn,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/stress/{run_id}.csv"}
+
+
 def _run(run: StressRunConfig, dry_run: bool, **kwargs) -> dict:
     """Execute a single stress run."""
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_distributed(run, dry_run)
+
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     project_name = f"npubsub-{run_id.lower().replace('_', '-')}"

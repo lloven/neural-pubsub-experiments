@@ -179,7 +179,64 @@ def _make_failure_fn(
         raise ValueError(f"Unknown failure type: {run.failure_type}")
 
 
+def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
+    """Execute a resilience run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+    from functools import partial as _partial
+
+    run_id = run.run_id
+    cfg = CONFIGS[run.config_name]
+    strat_env = _strategy_env(run.strategy)
+
+    pipeline_mix_fusion = cfg.get("pipeline_mix_fusion", "0.0")
+    mix_cqi = "0.0" if pipeline_mix_fusion != "0.0" else "0.5"
+    mix_anomaly = "0.0" if pipeline_mix_fusion != "0.0" else "0.5"
+
+    # Map failure target to distributed VM + container
+    failure_fn = None
+    if run.failure_type == "worker":
+        # Kill a worker on VM1 (domain 1)
+        failure_fn = _partial(
+            multi_vm_runner.inject_remote_kill,
+            vm=multi_vm_runner.VMS[0],
+            container="deploy-worker-0-1",
+            delay_s=run.failure_delay_s,
+        )
+
+    workload_env = {
+        "PIPELINE_MIX_CQI": mix_cqi,
+        "PIPELINE_MIX_ANOMALY": mix_anomaly,
+        "PIPELINE_MIX_FUSION": pipeline_mix_fusion,
+    }
+    if cfg.get("funnel_mode"):
+        workload_env["FUNNEL_MODE"] = cfg["funnel_mode"]
+    if cfg.get("funnel_bypass_replace"):
+        workload_env["FUNNEL_BYPASS_REPLACE"] = cfg["funnel_bypass_replace"]
+
+    multi_vm_runner.run_single(
+        config=run_id,
+        seed=run.seed,
+        placement_mode=strat_env.get("PLACEMENT_STRATEGY", "neural"),
+        governance_config="all",
+        broker_module=strat_env.get("BROKER_MODULE"),
+        placement=strat_env.get("PLACEMENT"),
+        workload_env=workload_env,
+        results_subdir="resilience",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        failure_fn=failure_fn,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/resilience/{run_id}.csv"}
+
+
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_distributed(run, dry_run)
+
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     # Must match run_single's normalization: lowercase + replace _ with -
