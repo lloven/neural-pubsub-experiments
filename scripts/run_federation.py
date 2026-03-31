@@ -116,7 +116,57 @@ def build_run_matrix(
     return runs
 
 
+def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
+    """Execute a federation run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+    from functools import partial
+
+    run_id = f"{run.config_name}_rate-medium_seed-{run.seed}"
+
+    failure_fn = None
+    if run.broker_failure:
+        failure_fn = partial(
+            multi_vm_runner.inject_remote_kill,
+            vm=multi_vm_runner.VMS[1],  # VM2 = domain 2
+            container="deploy-broker-1",
+            delay_s=run.failure_delay_s,
+        )
+    elif run.network_partition:
+        failure_fn = partial(
+            multi_vm_runner.inject_remote_partition,
+            vm_src=multi_vm_runner.VMS[0],
+            vm_dst=multi_vm_runner.VMS[1],
+            delay_s=run.failure_delay_s,
+        )
+
+    gov_config = "all" if run.governance else "none"
+
+    multi_vm_runner.run_single(
+        config=run_id,
+        seed=run.seed,
+        placement_mode=run.placement_strategy,
+        governance_config=gov_config,
+        workload_env={
+            "PIPELINE_MIX_CQI": "1.0",
+            "PIPELINE_MIX_ANOMALY": "0.0",
+            "PIPELINE_MIX_FUSION": "0.0",
+        },
+        results_subdir="federation",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        failure_fn=failure_fn,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/federation/{run_id}.csv"}
+
+
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_distributed(run, dry_run)
+
     run_id = f"{run.config_name}_rate-medium_seed-{run.seed}"
     total_duration = run.warmup_s + run.measurement_s
 

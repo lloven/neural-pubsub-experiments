@@ -184,7 +184,41 @@ def build_run_matrix(
     return runs
 
 
+def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
+    """Execute a baseline run on the distributed 4-VM cluster."""
+    from scripts import multi_vm_runner
+
+    mix = COMPLEXITIES[run.pipeline_complexity]
+    cmap = _COMPOSE_MAP[run.config_name]
+
+    multi_vm_runner.run_single(
+        config=run.run_id,
+        seed=run.seed,
+        placement_mode=run.placement_strategy if run.placement_strategy != "static" else "neural",
+        governance_config="none",
+        broker_module=cmap["env"].get("BROKER_MODULE"),
+        placement=cmap["env"].get("PLACEMENT"),
+        workload_env={
+            "ARRIVAL_RATE": str(run.arrival_rate),
+            "PIPELINE_MIX_CQI": str(mix["cqi_prediction"]),
+            "PIPELINE_MIX_ANOMALY": str(mix["anomaly_detection"]),
+            "PIPELINE_MIX_FUSION": str(mix["sensor_fusion"]),
+        },
+        results_subdir="baseline",
+        warmup_s=run.warmup_s,
+        measurement_s=run.measurement_s,
+        wan_emulation=False,
+        dry_run=dry_run,
+    )
+    return {"run_id": run.run_id, "status": "completed" if not dry_run else "dry_run",
+            "result_file": f"results/baseline/{run.run_id}.csv"}
+
+
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
+    topology = kwargs.get("topology", "local")
+    if topology == "distributed":
+        return _run_distributed(run, dry_run)
+
     run_id = run.run_id
     total_duration = run.warmup_s + run.measurement_s
     mix = COMPLEXITIES[run.pipeline_complexity]
