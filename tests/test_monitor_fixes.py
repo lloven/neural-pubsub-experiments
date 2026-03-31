@@ -265,6 +265,44 @@ def test_discover_phases_remote_passes_host(tmp_path):
     assert cmd[1] == "my-server"
 
 
+# ── Test 8: --distributed flag ─────────────────────────────────────────
+
+def test_distributed_flag_accepted():
+    """Monitor argparser must accept --distributed flag."""
+    from scripts.monitor import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["--distributed", "--once"])
+    assert args.distributed is True
+
+
+def test_distributed_flag_default_false():
+    """Default distributed flag is False."""
+    from scripts.monitor import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args([])
+    assert args.distributed is False
+
+
+def test_get_distributed_containers():
+    """get_distributed_containers queries all VMs and aggregates results."""
+    from scripts.monitor import get_distributed_containers
+
+    with patch("scripts.monitor.get_docker_containers") as mock_get:
+        mock_get.side_effect = [
+            [{"name": "deploy-broker-1", "status": "Up 2 min"},
+             {"name": "deploy-worker-0-1", "status": "Up 2 min"}],
+            [{"name": "deploy-broker-1", "status": "Up 2 min"}],
+            [],
+            [{"name": "deploy-broker-1", "status": "Up 1 min"}],
+        ]
+        result = get_distributed_containers()
+
+    assert len(result) == 4  # entries from 3 VMs (one empty)
+    assert mock_get.call_count == 4  # queried all 4 VMs
+
+
 def test_discover_phases_local_ignores_remote_host(tmp_path):
     """discover_phases without remote_host uses local filesystem, not SSH."""
     from scripts.monitor import discover_phases
