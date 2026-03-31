@@ -172,6 +172,25 @@ def get_docker_containers(remote_host: str | None = None) -> list[dict]:
         return []
 
 
+def get_distributed_containers() -> list[dict]:
+    """Get Docker containers from all VMs in the distributed cluster.
+
+    Returns a flat list of container dicts, each augmented with a 'vm' key.
+    """
+    try:
+        from scripts.multi_vm_runner import VMS
+    except ImportError:
+        return []
+
+    all_containers = []
+    for vm in VMS:
+        containers = get_docker_containers(remote_host=vm.ssh_host)
+        for c in containers:
+            c["vm"] = vm.name
+        all_containers.extend(containers)
+    return all_containers
+
+
 def get_run_pipelines(
     results_dir: Path, run_id: str, remote_host: str | None = None,
 ) -> tuple[int, int]:
@@ -218,10 +237,14 @@ def get_run_pipelines(
     return partial_count, final_count
 
 
-def render(results_dir: Path, progress: dict, remote_host: str | None = None):
+def render(results_dir: Path, progress: dict, remote_host: str | None = None,
+           distributed: bool = False):
     """Render the dashboard."""
     now = time.time()
-    containers = get_docker_containers(remote_host=remote_host)
+    if distributed:
+        containers = get_distributed_containers()
+    else:
+        containers = get_docker_containers(remote_host=remote_host)
 
     # Categorize runs
     runs_queued = []
@@ -516,6 +539,7 @@ def render_all_phases(
     summaries: list[dict],
     results_root: Path,
     remote_host: str | None = None,
+    distributed: bool = False,
 ) -> None:
     """Render a combined dashboard for all phases.
 
@@ -575,6 +599,20 @@ def render_all_phases(
                 )
             print()
 
+    # Distributed cluster status
+    if distributed:
+        containers = get_distributed_containers()
+        if containers:
+            from collections import Counter
+            vm_counts = Counter(c["vm"] for c in containers)
+            brokers = sum(1 for c in containers if "broker" in c["name"])
+            workers = sum(1 for c in containers if "worker" in c["name"])
+            print(f"  Cluster: {len(containers)} containers across {len(vm_counts)} VMs "
+                  f"({brokers} brokers, {workers} workers)")
+            for vm_name, count in sorted(vm_counts.items()):
+                print(f"    {vm_name}: {count} containers")
+            print()
+
     # Grand totals
     grand_total = sum(s["total"] for s in summaries)
     grand_done = sum(s["done"] for s in summaries)
@@ -627,6 +665,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--remote-dir", metavar="DIR", default=None,
         help="Repo directory on the remote host (default: reads HOST_D1_DIR from .env.local).",
     )
+    parser.add_argument(
+        "--distributed", action="store_true",
+        help="Monitor distributed 4-VM cluster (checks Docker on all VMs).",
+    )
     return parser
 
 
@@ -671,7 +713,8 @@ def main():
                     phase_summary(results_root / p, remote_host=remote_host)
                     for p in phases
                 ]
-                render_all_phases(summaries, results_root=results_root, remote_host=remote_host)
+                render_all_phases(summaries, results_root=results_root,
+                                  remote_host=remote_host, distributed=args.distributed)
 
                 if once_mode:
                     break
@@ -706,7 +749,8 @@ def main():
                 progress = _discover_progress_from_csvs(results_dir, remote_host=remote_host)
 
             if progress:
-                render(results_dir, progress, remote_host=remote_host)
+                render(results_dir, progress, remote_host=remote_host,
+                       distributed=args.distributed)
             else:
                 if once_mode:
                     print(f"  No results found in {results_dir}")
@@ -725,7 +769,8 @@ def main():
                 info.get("status") in ("done", "failed", "no_output")
                 for info in progress.values()
             ):
-                render(results_dir, progress, remote_host=remote_host)
+                render(results_dir, progress, remote_host=remote_host,
+                       distributed=args.distributed)
                 print("  \u2728 All runs complete!")
                 break
 
