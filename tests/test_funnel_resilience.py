@@ -634,7 +634,7 @@ class TestFunnelDispatchIntegration:
             await collector.export_csv(csv_path)
             return csv_path
 
-        csv_path = asyncio.get_event_loop().run_until_complete(_run())
+        csv_path = asyncio.run(_run())
 
         import csv as csv_mod
         with open(csv_path) as f:
@@ -777,9 +777,7 @@ class TestFunnelBypassReplace:
             broker._active_pipelines = {ps.pipeline_id: ps}
 
             # Run _replace_failed_stages for the dead worker
-            asyncio.get_event_loop().run_until_complete(
-                broker._replace_failed_stages("worker-dead")
-            )
+            asyncio.run(broker._replace_failed_stages("worker-dead"))
 
             # sensor_2 is a predecessor of fuse (fan-in), so it must NOT
             # have been re-placed; it should still point to worker-dead
@@ -836,9 +834,7 @@ class TestFunnelBypassReplace:
             ps.completed_stages = {"sensor_0", "sensor_1"}
             broker._active_pipelines = {ps.pipeline_id: ps}
 
-            asyncio.get_event_loop().run_until_complete(
-                broker._replace_failed_stages("worker-dead")
-            )
+            asyncio.run(broker._replace_failed_stages("worker-dead"))
 
             # Without bypass, sensor_2 should be re-placed to a live worker
             assert ps.placement["sensor_2"] != "worker-dead", (

@@ -47,6 +47,10 @@ from src.broker.placement import (
     GovernancePolicy,
     NetworkTopology,
     find_placement,
+    market_mode_placement,
+    locality_placement,
+    latency_greedy_placement,
+    spillover_placement,
 )
 from src.federation.propagation import SummaryPropagator
 from src.federation.summary import (
@@ -109,6 +113,10 @@ class BrokerConfig:
     governance_enabled: bool = False
     local_stage_types: list[str] = field(default_factory=list)
     trust_levels: dict[str, float] = field(default_factory=dict)
+    # Placement mode
+    placement_mode: str = "neural"  # "neural", "market", "locality", "latency", "spillover"
+    # WAN cost for market-mode cross-domain pricing
+    wan_cost_ms: float = 0.0
     # Transport (dual-transport factorial experiment)
     transport: str = "http"  # "http" or "kafka"
     kafka_bootstrap: str | None = None
@@ -171,6 +179,7 @@ def load_config(path: str) -> BrokerConfig:
         health_check_max_failures=int(raw.get("health_check_max_failures", 3)),
         local_stage_types=list(raw.get("local_stage_types", [])),
         trust_levels={str(k): float(v) for k, v in raw.get("trust_levels", {}).items()},
+        wan_cost_ms=float(raw.get("wan_cost_ms", 0.0)),
     )
 
 
@@ -405,6 +414,108 @@ class NeuralBroker:
             if eu.node_id == node_id:
                 eu.current_load = worker.current_load
                 break
+
+    # ------------------------------------------------------------------
+    # Placement dispatch (Task 4)
+    # ------------------------------------------------------------------
+
+    def _compute_clearing_prices(self) -> dict[str, dict[str, float]]:
+        """Compute market clearing prices from registered workers' bids.
+
+        Each worker bids on all known stage types with its bid_cost_ms.
+        Demand per stage type is estimated as 1 (one stage execution per
+        pipeline arrival). The clearing price = marginal cost at the
+        demand quantity within each (domain, stage_type) group.
+
+        Returns:
+            {domain_id: {stage_type: clearing_price}}
+        """
+        from src.broker.market import WorkerBid, compute_clearing_prices
+
+        # Collect known stage types from pipeline templates
+        known_stage_types = self._known_stage_types()
+
+        bids = []
+        for w in self._workers.values():
+            for st in known_stage_types:
+                bid = WorkerBid(
+                    worker_id=w.node_id,
+                    domain_id=w.domain_id,
+                    stage_type=st,
+                    compute_ms=w.bid_cost_ms,
+                    cost_per_stage=w.bid_cost_ms,
+                )
+                bids.append(bid)
+
+        # Demand: 1 stage execution per type per pipeline arrival
+        demand = {st: 1 for st in known_stage_types}
+        return compute_clearing_prices(bids, demand)
+
+    def _known_stage_types(self) -> set[str]:
+        """Return the set of stage types from registered pipeline templates.
+
+        Falls back to a default set if no pipelines have been submitted yet.
+        """
+        stage_types: set[str] = set()
+        pipelines = getattr(self, "_pipelines", {})
+        for ps in pipelines.values():
+            if hasattr(ps, "dag") and ps.dag is not None:
+                for stage in ps.dag.stages.values():
+                    stage_types.add(stage.stage_type)
+        if not stage_types:
+            # Default stage types from the 3 O-RAN pipeline templates
+            stage_types = {
+                "data_collect", "preprocess", "feature_extract",
+                "predict", "detect", "fuse", "aggregate", "report",
+            }
+        return stage_types
+
+    def _dispatch_placement(self, dag) -> dict[str, str] | None:
+        """Route placement to the correct algorithm based on config.placement_mode.
+
+        Args:
+            dag: The pipeline DAG to place.
+
+        Returns:
+            Placement dict {stage_id: node_id} or None if rejected (market mode).
+
+        Raises:
+            RuntimeError: If no feasible placement exists (neural/heuristic modes).
+        """
+        mode = self.config.placement_mode
+
+        if mode == "market":
+            prices = self._compute_clearing_prices()
+            return market_mode_placement(
+                dag,
+                self._topology,
+                self._governance,
+                prices,
+                self.config.wan_cost_ms,
+                self.config.domain_id,
+            )
+        elif mode == "locality":
+            return locality_placement(
+                dag, self._topology, self._governance, self.config.domain_id,
+            )
+        elif mode == "latency":
+            return latency_greedy_placement(
+                dag, self._topology, self._governance,
+            )
+        elif mode == "spillover":
+            return spillover_placement(
+                dag, self._topology, self._governance, self.config.domain_id,
+            )
+        else:
+            # Default: neural (or any unrecognized mode falls back to neural)
+            return find_placement(
+                dag=dag,
+                topology=self._topology,
+                governance=self._governance,
+                alpha=self.config.alpha,
+                beta=self.config.beta,
+                gamma=self.config.gamma,
+            )
 
     # ------------------------------------------------------------------
     # Health monitoring
@@ -1017,14 +1128,7 @@ class NeuralBroker:
             async with self._workers_lock:
                 if self._topology.nodes:
                     try:
-                        placement = find_placement(
-                            dag=dag,
-                            topology=self._topology,
-                            governance=self._governance,
-                            alpha=self.config.alpha,
-                            beta=self.config.beta,
-                            gamma=self.config.gamma,
-                        )
+                        placement = self._dispatch_placement(dag)
                     except RuntimeError as exc:
                         local_error = str(exc)
                 else:
@@ -1166,6 +1270,7 @@ class NeuralBroker:
                     capacity=req.capacity,
                     current_load=0.0,
                     url=worker_url,
+                    bid_cost_ms=req.bid_cost_ms,
                 )
                 self._rebuild_topology()
 
@@ -1553,7 +1658,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--governance-enabled",
         action="store_true",
-        default=False,
+        default=os.environ.get("GOVERNANCE_ENABLED", "").lower() == "true",
         help="Enable governance constraints on placement.",
     )
     parser.add_argument(
@@ -1566,6 +1671,20 @@ def _parse_args() -> argparse.Namespace:
         "--kafka-bootstrap",
         default=os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092"),
         help="Kafka bootstrap servers (only used with --transport kafka).",
+    )
+    parser.add_argument(
+        "--placement-mode",
+        default=os.environ.get("PLACEMENT_MODE", "neural"),
+        choices=["neural", "market", "locality", "latency", "spillover"],
+        help="Placement strategy: neural (S3), market (price-based), "
+        "locality (local-only), latency (greedy), spillover (local+overflow).",
+    )
+    parser.add_argument(
+        "--wan-cost",
+        type=float,
+        default=float(os.environ.get("WAN_COST_MS", "0.0")),
+        dest="wan_cost_ms",
+        help="WAN cost in ms for market-mode cross-domain pricing (default 0.0).",
     )
     parser.add_argument(
         "--log-level",
@@ -1601,6 +1720,8 @@ def _make_config_from_args(args: argparse.Namespace) -> BrokerConfig:
         cfg.peer_urls = args.peers
     cfg.summary_interval_s = args.summary_interval_s
     cfg.governance_enabled = args.governance_enabled
+    cfg.placement_mode = args.placement_mode
+    cfg.wan_cost_ms = args.wan_cost_ms
     cfg.transport = args.transport
     cfg.kafka_bootstrap = args.kafka_bootstrap if args.transport == "kafka" else None
 

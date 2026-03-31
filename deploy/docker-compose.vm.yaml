@@ -1,0 +1,202 @@
+# Per-VM Docker Compose template for 4-domain O-RAN deployment.
+#
+# Each VM runs this compose file with its own .env file:
+#   docker compose --env-file deploy/vm1-edge-du.env -f deploy/docker-compose.vm.yaml up -d
+#
+# All containers use host networking. Workers get unique ports via base+offset.
+# The broker listens on ${BROKER_PORT} (default 8080).
+
+x-worker-common: &worker-common
+  image: neural-pubsub:latest
+  network_mode: host
+  restart: unless-stopped
+
+services:
+  broker:
+    image: neural-pubsub:latest
+    network_mode: host
+    entrypoint:
+      - python3
+      - -m
+      - src.broker.neural_broker
+      - --domain=${BROKER_DOMAIN}
+      - --port=${BROKER_PORT:-8080}
+      - --peers
+      - ${PEER_URL_1}
+      - ${PEER_URL_2}
+      - ${PEER_URL_3}
+      - --summary-interval=${FEDERATION_INTERVAL_S:-10}
+      - --wan-cost=${WAN_COST_MS:-0}
+      - --placement-mode=${PLACEMENT_MODE:-market}
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOVERNANCE_ENABLED=${GOVERNANCE_ENABLED:-false}
+
+  # 12 workers with unique ports (base + 0..11)
+  worker-0:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-0
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8081
+      - --callback-url=http://${VM_IP:-localhost}:8081
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-1:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-1
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8082
+      - --callback-url=http://${VM_IP:-localhost}:8082
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-2:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-2
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8083
+      - --callback-url=http://${VM_IP:-localhost}:8083
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-3:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-3
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8084
+      - --callback-url=http://${VM_IP:-localhost}:8084
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-4:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-4
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8085
+      - --callback-url=http://${VM_IP:-localhost}:8085
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-5:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-5
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8086
+      - --callback-url=http://${VM_IP:-localhost}:8086
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-6:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-6
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8087
+      - --callback-url=http://${VM_IP:-localhost}:8087
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-7:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-7
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8088
+      - --callback-url=http://${VM_IP:-localhost}:8088
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-8:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-8
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8089
+      - --callback-url=http://${VM_IP:-localhost}:8089
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-9:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-9
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8090
+      - --callback-url=http://${VM_IP:-localhost}:8090
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-10:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-10
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8091
+      - --callback-url=http://${VM_IP:-localhost}:8091
+      - --bid-cost=${WORKER_BID_COST_MS:-100}
+
+  worker-11:
+    <<: *worker-common
+    entrypoint:
+      - python3
+      - -m
+      - src.worker
+      - --node-id=${BROKER_DOMAIN}-worker-11
+      - --domain=${BROKER_DOMAIN}
+      - --slice=${WORKER_SLICE}
+      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --port=8092
+      - --callback-url=http://${VM_IP:-localhost}:8092
+      - --bid-cost=${WORKER_BID_COST_MS:-100}

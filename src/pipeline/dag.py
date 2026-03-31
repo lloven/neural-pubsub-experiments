@@ -48,6 +48,7 @@ class Stage:
     output_data_rate: float  # omega_v
     slice_requirement: Optional[str] = None
     data_sovereignty_domain: Optional[str] = None
+    metadata: Optional[dict] = None  # Arbitrary key-value pairs (e.g. O-RAN domain)
 
 
 @dataclass
@@ -89,12 +90,23 @@ class PipelineDAG:
         order = dag.topological_sort()  # ["s1", "s2"]
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, value_budget: Optional[float] = None) -> None:
         self._stages: dict[str, Stage] = {}
         self._edges: list[Edge] = []
         self._edge_index: dict[tuple[str, str], Edge] = {}
         self._successors: dict[str, list[str]] = defaultdict(list)
         self._predecessors: dict[str, list[str]] = defaultdict(list)
+        self.value_budget: Optional[float] = value_budget
+
+    def accepts_cost(self, total_cost: float) -> bool:
+        """Check whether this pipeline's value budget covers the total cost.
+
+        Returns True if value_budget is None (legacy: accept any cost)
+        or if total_cost <= value_budget.
+        """
+        if self.value_budget is None:
+            return True
+        return total_cost <= self.value_budget
 
     # ------------------------------------------------------------------
     # Construction

@@ -28,3 +28,12 @@ docs/
 # 5GTN deployment scripts (internal infra details, SSH config, IP ranges)
 scripts/5gtn/
 .5gtn-staging/
+
+# Deployment env files with real IPs (use *.env.example templates)
+deploy/vm*.env
+
+# Internal planning notes
+notes/
+
+# Local VM config override (real IPs/SSH aliases)
+scripts/multi_vm_config_local.py

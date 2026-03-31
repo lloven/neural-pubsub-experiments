@@ -343,3 +343,132 @@ def sensor_fusion_pipeline(n_sensors: int) -> PipelineDAG:
     dag.add_edge(Edge("fuse", "decide", latency_bound=5.0))
 
     return dag
+
+
+# ---------------------------------------------------------------------------
+# 8-stage O-RAN pipeline templates (Tier 2 experiments)
+# ---------------------------------------------------------------------------
+
+
+def cqi_prediction_chain_8stage() -> PipelineDAG:
+    """8-stage CQI prediction chain (tree, gamma=0).
+
+    Linear chain crossing all 4 O-RAN domains:
+    DU:raw_cqi → DU:denoise → CU:normalize → CU:feature_extract
+    → RIC:predict → RIC:validate → nRT:aggregate → SMO:report
+    """
+    dag = PipelineDAG()
+
+    stages = [
+        ("du_raw_cqi",       "data_collect",    0.1, 5.0, "DU"),
+        ("du_denoise",       "preprocess",      0.2, 4.0, "DU"),
+        ("cu_normalize",     "preprocess",      0.2, 3.0, "CU"),
+        ("cu_feature_ext",   "feature_extract", 0.3, 2.0, "CU"),
+        ("ric_predict",      "predict",         0.4, 1.0, "near-RT-RIC"),
+        ("ric_validate",     "predict",         0.2, 1.0, "near-RT-RIC"),
+        ("nrt_aggregate",    "aggregate",       0.2, 1.0, "non-RT-RIC"),
+        ("smo_report",       "report",          0.1, 0.5, "SMO"),
+    ]
+    for sid, stype, demand, rate, domain in stages:
+        dag.add_stage(Stage(sid, stype, demand, rate, metadata={"domain": domain}))
+
+    edges = [
+        ("du_raw_cqi",     "du_denoise",     50.0),
+        ("du_denoise",     "cu_normalize",   20.0),
+        ("cu_normalize",   "cu_feature_ext", 10.0),
+        ("cu_feature_ext", "ric_predict",    20.0),
+        ("ric_predict",    "ric_validate",   10.0),
+        ("ric_validate",   "nrt_aggregate",  30.0),
+        ("nrt_aggregate",  "smo_report",     20.0),
+    ]
+    for src, dst, lb in edges:
+        dag.add_edge(Edge(src, dst, latency_bound=lb))
+
+    return dag
+
+
+def ran_anomaly_detection_8stage() -> PipelineDAG:
+    """8-stage RAN anomaly detection (series-parallel, gamma=0).
+
+    4 parallel sources (2 DU + 2 CU) converge at near-RT RIC:
+    DU:du_metrics ──────────┐
+    DU:rf_measurements ─────┤→ RIC:fuse → RIC:classify → nRT:alert → SMO:log
+    CU:cu_cp_signaling ─────┤
+    CU:cu_up_traffic ───────┘
+    """
+    dag = PipelineDAG()
+
+    stages = [
+        ("du_metrics",       "data_collect", 0.1, 5.0, "DU"),
+        ("du_rf_meas",       "data_collect", 0.1, 5.0, "DU"),
+        ("cu_cp_signaling",  "data_collect", 0.1, 3.0, "CU"),
+        ("cu_up_traffic",    "data_collect", 0.1, 3.0, "CU"),
+        ("ric_fuse",         "fuse",         0.3, 2.0, "near-RT-RIC"),
+        ("ric_classify",     "detect",       0.4, 1.0, "near-RT-RIC"),
+        ("nrt_alert",        "aggregate",    0.2, 1.0, "non-RT-RIC"),
+        ("smo_log",          "report",       0.1, 0.5, "SMO"),
+    ]
+    for sid, stype, demand, rate, domain in stages:
+        dag.add_stage(Stage(sid, stype, demand, rate, metadata={"domain": domain}))
+
+    # 4 sources → fuse (fan-in)
+    for src in ["du_metrics", "du_rf_meas", "cu_cp_signaling", "cu_up_traffic"]:
+        dag.add_edge(Edge(src, "ric_fuse", latency_bound=20.0))
+    # Sequential tail
+    dag.add_edge(Edge("ric_fuse", "ric_classify", latency_bound=10.0))
+    dag.add_edge(Edge("ric_classify", "nrt_alert", latency_bound=30.0))
+    dag.add_edge(Edge("nrt_alert", "smo_log", latency_bound=20.0))
+
+    return dag
+
+
+def ran_intelligence_suite_8stage() -> PipelineDAG:
+    """8-stage RAN Intelligence Suite (entangled, gamma>0).
+
+    Cross-domain fan-out, diamonds, shared stages:
+                          ┌── RIC:cqi_predict ───────────────┐
+    DU:raw_cqi → CU:feature_extract ─┤                               ├→ (sinks)
+                          └── RIC:anomaly_detect ─┐          │
+                                    ↑             │          │
+    CU:cell_load → CU:load_normalize┤             ↓          │
+                                    └──→ nRT:resource_allocate──┘
+    DU:ue_mobility → RIC:mobility_predict ────────────────────┘
+
+    8 stages, 10 edges. Non-tree: diamonds + cross-tree fan-in.
+    """
+    dag = PipelineDAG()
+
+    stages = [
+        ("du_raw_cqi",          "data_collect",    0.1, 5.0, "DU"),
+        ("du_ue_mobility",      "data_collect",    0.1, 2.0, "DU"),
+        ("cu_feature_extract",  "feature_extract", 0.3, 2.0, "CU"),
+        ("cu_cell_load",        "data_collect",    0.1, 3.0, "CU"),
+        ("cu_load_normalize",   "preprocess",      0.2, 2.0, "CU"),
+        ("ric_cqi_predict",     "predict",         0.4, 1.0, "near-RT-RIC"),
+        ("ric_anomaly_detect",  "detect",          0.3, 1.0, "near-RT-RIC"),
+        ("ric_mobility_predict","predict",         0.4, 1.0, "near-RT-RIC"),
+    ]
+    for sid, stype, demand, rate, domain in stages:
+        dag.add_stage(Stage(sid, stype, demand, rate, metadata={"domain": domain}))
+
+    edges = [
+        # Source → processing
+        ("du_raw_cqi",          "cu_feature_extract",  50.0),
+        ("cu_cell_load",        "cu_load_normalize",   10.0),
+        ("du_ue_mobility",      "ric_mobility_predict", 50.0),
+        # Fan-out: feature_extract → {cqi_predict, anomaly_detect}
+        ("cu_feature_extract",  "ric_cqi_predict",     20.0),
+        ("cu_feature_extract",  "ric_anomaly_detect",  20.0),
+        # Shared: load_normalize → {anomaly_detect, cqi_predict}
+        ("cu_load_normalize",   "ric_anomaly_detect",  20.0),
+        ("cu_load_normalize",   "ric_cqi_predict",     30.0),
+        # Cross-tree: mobility_predict → {cqi_predict, anomaly_detect}
+        ("ric_mobility_predict", "ric_cqi_predict",    30.0),
+        ("ric_mobility_predict", "ric_anomaly_detect", 30.0),
+        # cell_load → feature_extract (shared source)
+        ("cu_cell_load",        "cu_feature_extract",  50.0),
+    ]
+    for src, dst, lb in edges:
+        dag.add_edge(Edge(src, dst, latency_bound=lb))
+
+    return dag

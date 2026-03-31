@@ -1,0 +1,31 @@
+# =============================================================================
+# Overlay: Governance on D1 only (partial governance, Scenario B from TEAC §4).
+#
+# Merges on top of docker-compose.local.yaml + docker-compose.market.yaml.
+# Only broker-d1 enforces data sovereignty; broker-d2 is unconstrained.
+#
+# TEAC prediction: this partial configuration produces supermodularly worse
+# welfare than either both-enforce or neither-enforce, because ungoverned D2
+# exploits governed D1's honest reporting (the lemons accelerator).
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml \
+#                  -f docker-compose.market.yaml \
+#                  -f docker-compose.gov-d1-only.yaml up
+# =============================================================================
+
+services:
+
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers http://broker-d2:8080
+      --placement-mode ${PLACEMENT_MODE:-market}
+      --governance-enabled
+    dns_opt:
+      - ndots:0
+
+  # broker-d2: inherits from market overlay WITHOUT --governance-enabled
