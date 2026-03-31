@@ -341,7 +341,53 @@ def test_render_all_phases_shows_per_phase_bars(tmp_path, capsys):
     )
 
 
-# ── Test 9: --distributed flag ─────────────────────────────────────────
+# ── Test 9: monitor reads .progress.json written by phase_main ─────────
+
+def test_monitor_reads_progress_from_distributed_runs(tmp_path):
+    """Monitor must read .progress.json that phase_main writes during
+    distributed runs, showing correct running/queued/done counts."""
+    from scripts.monitor import phase_summary
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+    from datetime import datetime, timedelta
+    now = datetime.now()
+
+    progress = {
+        "rr_http_rate-medium_stages-3_seed-42": {
+            "status": "done",
+            "detail": "results/baseline/rr_http_rate-medium_stages-3_seed-42.csv",
+            "timestamp": (now - timedelta(minutes=14)).isoformat(),
+        },
+        "rr_http_rate-medium_stages-3_seed-123": {
+            "status": "running",
+            "detail": "",
+            "timestamp": (now - timedelta(minutes=2)).isoformat(),
+        },
+        "rr_http_rate-medium_stages-3_seed-456": {
+            "status": "queued",
+            "detail": "",
+            "timestamp": "",
+        },
+        "random_http_rate-medium_stages-3_seed-42": {
+            "status": "queued",
+            "detail": "",
+            "timestamp": "",
+        },
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    summary = phase_summary(phase_dir)
+    assert summary["done"] == 1
+    assert summary["running"] == 1
+    assert summary["queued"] == 2
+    assert summary["total"] == 4
+    assert summary["fraction"] > 0.25  # 1 done + partial credit for running
+    assert summary["fraction"] < 0.75  # but not too much
+    assert summary["eta_s"] > 0
+
+
+# ── Test 10: --distributed flag ────────────────────────────────────────
 
 def test_distributed_flag_accepted():
     """Monitor argparser must accept --distributed flag."""
