@@ -104,7 +104,7 @@ def build_contention_matrix(
     return runs
 
 
-def _run_contention(run: ContentionRunConfig, dry_run: bool) -> dict:
+def _run_contention(run: ContentionRunConfig, dry_run: bool, **kwargs) -> dict:
     """Execute one contention run."""
     run_id = f"{run.config_name}_seed-{run.seed}"
     total_duration = run.warmup_s + run.measurement_s

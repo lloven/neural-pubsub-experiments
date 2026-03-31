@@ -18,19 +18,21 @@ services:
     entrypoint:
       - python3
       - -m
-      - src.broker.neural_broker
+      - ${BROKER_MODULE:-src.broker.neural_broker}
       - --domain=${BROKER_DOMAIN}
       - --port=${BROKER_PORT:-8080}
       - --peers
       - ${PEER_URL_1}
       - ${PEER_URL_2}
       - ${PEER_URL_3}
-      - --summary-interval=${FEDERATION_INTERVAL_S:-10}
-      - --wan-cost=${WAN_COST_MS:-0}
-      - --placement-mode=${PLACEMENT_MODE:-market}
     environment:
       - PYTHONUNBUFFERED=1
+      - BROKER_MODULE=${BROKER_MODULE:-src.broker.neural_broker}
       - GOVERNANCE_ENABLED=${GOVERNANCE_ENABLED:-false}
+      - PLACEMENT_MODE=${PLACEMENT_MODE:-neural}
+      - PLACEMENT=${PLACEMENT:-round_robin}
+      - WAN_COST_MS=${WAN_COST_MS:-0}
+      - FEDERATION_INTERVAL_S=${FEDERATION_INTERVAL_S:-10}
 
   # 12 workers with unique ports (base + 0..11)
   worker-0:
