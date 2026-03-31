@@ -265,7 +265,83 @@ def test_discover_phases_remote_passes_host(tmp_path):
     assert cmd[1] == "my-server"
 
 
-# ── Test 8: --distributed flag ─────────────────────────────────────────
+# ── Test 8: per-phase progress bar and ETA ──────────────────────────────
+
+def test_phase_summary_includes_fraction_and_eta(tmp_path):
+    """phase_summary must return fraction and eta_s for rendering progress bars."""
+    from scripts.monitor import phase_summary
+    from datetime import datetime, timedelta
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+    now = datetime.now()
+
+    progress = {
+        "run1": {"status": "done", "timestamp": (now - timedelta(minutes=30)).isoformat()},
+        "run2": {"status": "done", "timestamp": (now - timedelta(minutes=18)).isoformat()},
+        "run3": {"status": "running", "timestamp": (now - timedelta(minutes=5)).isoformat()},
+        "run4": {"status": "queued", "timestamp": ""},
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    summary = phase_summary(phase_dir)
+    assert "fraction" in summary, "phase_summary must include 'fraction'"
+    assert "eta_s" in summary, "phase_summary must include 'eta_s'"
+    assert 0 <= summary["fraction"] <= 1.0
+    assert summary["fraction"] > 0  # 2 done out of 4
+    assert summary["eta_s"] >= 0 or summary["eta_s"] == -1
+
+
+def test_phase_fraction_with_partial_credit(tmp_path):
+    """Phase fraction should give partial credit for running runs."""
+    from scripts.monitor import phase_summary
+    from datetime import datetime, timedelta
+
+    phase_dir = tmp_path / "slicing"
+    phase_dir.mkdir()
+    now = datetime.now()
+
+    # 1 done, 1 running (halfway through based on DEFAULT_RUN_DURATION_S)
+    progress = {
+        "run1": {"status": "done", "timestamp": (now - timedelta(minutes=12)).isoformat()},
+        "run2": {"status": "running", "timestamp": (now - timedelta(minutes=6)).isoformat()},
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    summary = phase_summary(phase_dir)
+    # Fraction should be > 0.5 (1 done + partial credit for running)
+    assert summary["fraction"] > 0.5, (
+        f"Expected fraction > 0.5 with 1 done + 1 running, got {summary['fraction']}"
+    )
+
+
+def test_render_all_phases_shows_per_phase_bars(tmp_path, capsys):
+    """render_all_phases must show a progress bar per phase."""
+    from scripts.monitor import render_all_phases, phase_summary
+
+    phase_dir = tmp_path / "resilience"
+    phase_dir.mkdir()
+    progress = {
+        "run1": {"status": "done", "timestamp": "2026-03-25T10:00:00"},
+        "run2": {"status": "done", "timestamp": "2026-03-25T10:12:00"},
+        "run3": {"status": "queued", "timestamp": ""},
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    summaries = [phase_summary(phase_dir)]
+    render_all_phases(summaries, results_root=tmp_path)
+
+    captured = capsys.readouterr()
+    # Should contain Unicode block characters from progress_bar
+    assert "\u2588" in captured.out or "\u2591" in captured.out, (
+        "Per-phase progress bar must use block characters"
+    )
+    assert "ETA" in captured.out or "eta" in captured.out.lower(), (
+        "Per-phase ETA must be shown"
+    )
+
+
+# ── Test 9: --distributed flag ─────────────────────────────────────────
 
 def test_distributed_flag_accepted():
     """Monitor argparser must accept --distributed flag."""

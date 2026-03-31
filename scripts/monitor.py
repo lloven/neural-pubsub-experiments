@@ -523,14 +523,61 @@ def phase_summary(
     n_running = sum(1 for v in progress.values() if v.get("status") == "running")
     n_failed = sum(1 for v in progress.values() if v.get("status") == "failed")
     n_queued = sum(1 for v in progress.values() if v.get("status") == "queued")
+    total = len(progress)
+
+    # Compute fraction with partial credit for running runs.
+    # Each running run contributes (run_elapsed / expected_duration) as partial credit.
+    # Follows the neural-router legacy monitor's weight-based fraction pattern.
+    from scripts._common import DEFAULT_RUN_DURATION_S
+    now = time.time()
+    partial_credit = 0.0
+    for info in progress.values():
+        if info.get("status") == "running":
+            ts = info.get("timestamp", "")
+            try:
+                start = datetime.fromisoformat(ts).timestamp()
+                run_elapsed = now - start
+                partial_credit += min(run_elapsed / DEFAULT_RUN_DURATION_S, 0.99)
+            except (ValueError, TypeError):
+                pass
+
+    effective_done = n_done + partial_credit
+    fraction = effective_done / total if total > 0 else 0.0
+
+    # Compute ETA from actual completed run durations.
+    # Collect timestamps to find phase start and compute avg run time.
+    all_ts = []
+    done_ts = []
+    for info in progress.values():
+        ts = info.get("timestamp", "")
+        try:
+            t = datetime.fromisoformat(ts).timestamp()
+            all_ts.append(t)
+            if info.get("status") == "done":
+                done_ts.append(t)
+        except (ValueError, TypeError):
+            pass
+
+    if effective_done > 0 and all_ts:
+        phase_start = min(all_ts)
+        elapsed = now - phase_start
+        remaining = total - effective_done
+        rate = elapsed / effective_done  # seconds per effective run
+        eta_s = rate * remaining
+    elif total > 0:
+        eta_s = (total - effective_done) * DEFAULT_RUN_DURATION_S
+    else:
+        eta_s = -1
 
     return {
         "phase": phase_name,
-        "total": len(progress),
+        "total": total,
         "done": n_done,
         "running": n_running,
         "failed": n_failed,
         "queued": n_queued,
+        "fraction": fraction,
+        "eta_s": eta_s,
         "progress": progress,
     }
 
@@ -557,14 +604,20 @@ def render_all_phases(
     print("=" * 72)
     print()
 
-    # Summary table
-    header = f"  {'Phase':<20} {'Total':>6} {'Done':>6} {'Running':>8} {'Failed':>7}"
+    # Summary table with progress bars and ETAs
+    header = f"  {'Phase':<15} {'Progress':<22} {'Done':>5}/{'Total':<5} {'Run':>3} {'Fail':>4}  {'ETA':>10}"
     print(header)
-    print("  " + "\u2500" * 49)
+    print("  " + "\u2500" * 70)
     for s in summaries:
+        frac = s.get("fraction", 0.0)
+        eta = s.get("eta_s", -1)
+        bar = mini_bar(frac, 15)
+        eta_str = format_time(eta) if eta >= 0 else "--:--"
+        fail_str = str(s["failed"]) if s["failed"] > 0 else " "
+        run_str = str(s["running"]) if s["running"] > 0 else " "
         print(
-            f"  {s['phase']:<20} {s['total']:>6} {s['done']:>6} "
-            f"{s['running']:>8} {s['failed']:>7}"
+            f"  {s['phase']:<15} {bar} {frac*100:5.1f}%  "
+            f"{s['done']:>4}/{s['total']:<4}  {run_str:>3} {fail_str:>4}  {eta_str:>10}"
         )
     print()
 
