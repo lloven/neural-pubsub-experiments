@@ -1,0 +1,77 @@
+# =============================================================================
+# Overlay: Enable market-mode allocation on brokers.
+#
+# Merges on top of docker-compose.local.yaml.  Adds --placement-mode market
+# to both broker commands so that allocation uses price-signal coordination
+# instead of centralized neural/heuristic placement.
+#
+# Workers advertise tiered capabilities and bid costs.  Brokers compute
+# clearing prices per stage type and allocate to the cheapest eligible worker,
+# trading cross-domain when the price gap exceeds the WAN cost.
+#
+# Configs:
+#   market-dual:      Both brokers in market mode (the test condition)
+#   oracle-single:    Use docker-compose.local.yaml as-is (central S3 broker)
+#   locality-only:    Each broker places only on local workers (no federation)
+#   latency-greedy:   Each broker picks lowest-latency worker (including remote)
+#   spillover:        Local-first, overflow to remote when full
+#
+# Usage:
+#   docker compose -f docker-compose.local.yaml \
+#                  -f docker-compose.market.yaml up
+# =============================================================================
+
+services:
+
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers http://broker-d2:8080
+      --placement-mode ${PLACEMENT_MODE:-market}
+    environment:
+      - RESULT_FILE=${RESULT_FILE:-/app/results/metrics.csv}
+      - WAN_COST_MS=${WAN_COST_MS:-50}
+    dns_opt:
+      - ndots:0
+
+  broker-d2:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d2
+      --broker-id broker-d2
+      --port 8080
+      --peers http://broker-d1:8080
+      --placement-mode ${PLACEMENT_MODE:-market}
+    environment:
+      - WAN_COST_MS=${WAN_COST_MS:-50}
+    dns_opt:
+      - ndots:0
+
+  # Workers advertise capabilities via environment
+  worker-d1-urllc-1:
+    environment:
+      - CAPABILITIES=data_collect:primary,feature_extract:secondary,predict:primary
+      - BID_COST_MS=${BID_COST_URLLC:-10}
+
+  worker-d1-urllc-2:
+    environment:
+      - CAPABILITIES=data_collect:primary,feature_extract:secondary,predict:primary
+      - BID_COST_MS=${BID_COST_URLLC:-10}
+
+  worker-d1-embb-1:
+    environment:
+      - CAPABILITIES=data_collect:primary,feature_extract:primary,fuse:primary,detect:secondary
+      - BID_COST_MS=${BID_COST_EMBB:-15}
+
+  worker-d2-embb-1:
+    environment:
+      - CAPABILITIES=data_collect:primary,feature_extract:primary,fuse:primary,detect:primary
+      - BID_COST_MS=${BID_COST_EMBB:-15}
+
+  worker-d2-embb-2:
+    environment:
+      - CAPABILITIES=data_collect:secondary,feature_extract:secondary,fuse:secondary,detect:primary
+      - BID_COST_MS=${BID_COST_EMBB_SMALL:-20}

@@ -33,7 +33,7 @@ async def _register_workers(broker: StaticBroker | KafkaBroker, n: int) -> list[
             broker._workers[nid] = WorkerInfo(
                 node_id=nid,
                 domain_id="d1",
-                slice_id="eMBB",
+                slice_id="flat",
                 capacity=1.0,
                 url=f"http://localhost:{8081 + i}",
             )

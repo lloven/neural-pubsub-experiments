@@ -48,6 +48,11 @@ class ExecutionUnit:
         slice_id: Network slice this node is part of (Eq. 9).
         capacity: Maximum processing capacity C (normalised, Eq. 1).
         current_load: Currently consumed capacity on this node.
+        compute_times: Optional dict mapping stage_type to compute time in ms.
+            When set, the placement cost function includes per-stage compute
+            cost C_total (the sum of compute times for each stage on its
+            assigned worker). When None, the legacy cost function is used
+            (network latency only, no compute cost).
     """
 
     node_id: str
@@ -55,6 +60,7 @@ class ExecutionUnit:
     slice_id: str
     capacity: float
     current_load: float = 0.0
+    compute_times: Optional[dict[str, float]] = None
 
     @property
     def residual_capacity(self) -> float:
@@ -357,6 +363,144 @@ def _placement_cost(
 
     # Weighted sum per Eq. 10: alpha * latency + beta * load + gamma * governance
     return alpha * l_total + beta * u_total + gamma * d_cross
+
+
+def compute_placement_cost(
+    placement: dict[str, str],
+    dag: PipelineDAG,
+    topology: NetworkTopology,
+    governance: GovernancePolicy,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 1.0,
+) -> float:
+    """Compute placement cost including per-stage compute time (Eq. 10 extended).
+
+    Extended cost: α·(L_total + C_total) + β·U_total + γ·D_cross
+
+    where C_total = Σ compute_time(worker, stage_type) for all stages.
+    If a worker has no compute_times configured, C_total contribution = 0
+    for stages placed on that worker (backward compatible).
+
+    This is the public API for the cost function. The internal _placement_cost
+    is the legacy version without compute time.
+    """
+    # Compute L_total, U_total, D_cross (same as _placement_cost)
+    l_total = 0.0
+    d_cross = 0
+
+    for edge in dag.edges:
+        src_node = placement[edge.source_id]
+        tgt_node = placement[edge.target_id]
+        l_total += topology.latency(src_node, tgt_node)
+        if topology.get_node(src_node).domain_id != topology.get_node(tgt_node).domain_id:
+            d_cross += 1
+
+    u_total = 0.0
+    for stage_id, node_id in placement.items():
+        stage = dag.get_stage(stage_id)
+        node = topology.get_node(node_id)
+        u_total += stage.computational_demand / max(node.capacity, 1e-12)
+
+    # NEW: C_total (per-stage compute time from worker capabilities)
+    c_total = 0.0
+    for stage_id, node_id in placement.items():
+        stage = dag.get_stage(stage_id)
+        node = topology.get_node(node_id)
+        if node.compute_times and stage.stage_type in node.compute_times:
+            c_total += node.compute_times[stage.stage_type]
+
+    # Extended Eq. 10: α·(L + C) + β·U + γ·D
+    return alpha * (l_total + c_total) + beta * u_total + gamma * d_cross
+
+
+def market_mode_placement(
+    dag: PipelineDAG,
+    topology: NetworkTopology,
+    governance: GovernancePolicy,
+    clearing_prices: dict[str, dict[str, float]],
+    wan_cost: float,
+    local_domain: str,
+) -> Optional[dict[str, str]]:
+    """Allocate pipeline stages using market clearing prices.
+
+    For each stage, compare the local domain's clearing price against
+    remote domains' prices + WAN cost. Place on the cheapest option.
+    If the pipeline's total cost exceeds its value_budget, return None
+    (pipeline rejected).
+
+    Args:
+        dag: The pipeline DAG with stages and value_budget.
+        topology: Network topology (used to find workers per domain).
+        governance: Governance policy (sovereignty constraints still apply).
+        clearing_prices: {domain_id: {stage_type: price}} from market clearing.
+        wan_cost: Additional cost for cross-domain data transfer.
+        local_domain: The domain where this pipeline was submitted.
+
+    Returns:
+        Placement dict {stage_id: node_id} or None if rejected.
+    """
+    from src.broker.market import should_trade_cross_domain
+
+    placement: dict[str, str] = {}
+    total_cost = 0.0
+
+    # Group workers by domain for quick lookup
+    domain_workers: dict[str, list[ExecutionUnit]] = {}
+    for node in topology.nodes:
+        domain_workers.setdefault(node.domain_id, []).append(node)
+
+    for stage in dag.stages.values():
+        stage_type = stage.stage_type
+        local_price = clearing_prices.get(local_domain, {}).get(stage_type, float("inf"))
+
+        # Find best remote option
+        best_remote_domain = None
+        best_remote_price = float("inf")
+        for domain_id, prices in clearing_prices.items():
+            if domain_id == local_domain:
+                continue
+            remote_price = prices.get(stage_type, float("inf"))
+            if should_trade_cross_domain(local_price, remote_price, wan_cost):
+                if remote_price + wan_cost < best_remote_price + wan_cost:
+                    best_remote_domain = domain_id
+                    best_remote_price = remote_price
+
+        # Decide: local or remote?
+        if best_remote_domain is not None:
+            chosen_domain = best_remote_domain
+            stage_cost = best_remote_price + wan_cost
+        else:
+            chosen_domain = local_domain
+            stage_cost = local_price
+
+        total_cost += stage_cost
+
+        # Pick a worker from the chosen domain
+        # (simplest: first available worker with capacity)
+        workers = domain_workers.get(chosen_domain, [])
+        placed = False
+        for worker in workers:
+            if worker.residual_capacity >= stage.computational_demand:
+                placement[stage.id] = worker.node_id
+                placed = True
+                break
+        if not placed:
+            # No available worker in chosen domain → try local fallback
+            for worker in domain_workers.get(local_domain, []):
+                if worker.residual_capacity >= stage.computational_demand:
+                    placement[stage.id] = worker.node_id
+                    total_cost = total_cost - stage_cost + local_price
+                    placed = True
+                    break
+            if not placed:
+                return None  # Cannot place this stage anywhere
+
+    # Check budget
+    if not dag.accepts_cost(total_cost):
+        return None
+
+    return placement
 
 
 # --------------------------------------------------------------------------
@@ -817,3 +961,195 @@ def find_placement(
         return _dp_placement(dag, topology, governance, alpha, beta, gamma)
     else:
         return _greedy_placement(dag, topology, governance, alpha, beta, gamma)
+
+
+# --------------------------------------------------------------------------
+# Heuristic baseline placements (Task 5)
+# --------------------------------------------------------------------------
+
+
+def locality_placement(
+    dag: PipelineDAG,
+    topology: NetworkTopology,
+    governance: GovernancePolicy,
+    local_domain: str,
+) -> dict[str, str]:
+    """Place all stages on workers in the local domain only.
+
+    Filters workers to those in ``local_domain`` and greedily assigns
+    each stage (in topological order) to the first worker with sufficient
+    residual capacity.
+
+    Args:
+        dag: The pipeline DAG.
+        topology: Network topology.
+        governance: Governance policy.
+        local_domain: Domain to restrict placement to.
+
+    Returns:
+        Placement dict {stage_id: node_id}.
+
+    Raises:
+        RuntimeError: If no local worker has capacity for a stage.
+    """
+    local_workers = [n for n in topology.nodes if n.domain_id == local_domain]
+    if not local_workers:
+        raise RuntimeError(
+            f"No workers in local domain '{local_domain}' for locality placement."
+        )
+
+    placement: dict[str, str] = {}
+    additional_load: dict[str, float] = {}
+
+    for stage_id in dag.topological_sort():
+        stage = dag.get_stage(stage_id)
+        placed = False
+        for worker in local_workers:
+            committed = additional_load.get(worker.node_id, 0.0)
+            residual = worker.residual_capacity - committed
+            if residual >= stage.computational_demand - 1e-9:
+                if _is_node_feasible_simple(stage, worker, governance):
+                    placement[stage_id] = worker.node_id
+                    additional_load[worker.node_id] = committed + stage.computational_demand
+                    placed = True
+                    break
+        if not placed:
+            raise RuntimeError(
+                f"No feasible local worker for stage '{stage_id}' in domain '{local_domain}'."
+            )
+
+    return placement
+
+
+def latency_greedy_placement(
+    dag: PipelineDAG,
+    topology: NetworkTopology,
+    governance: GovernancePolicy,
+) -> dict[str, str]:
+    """Assign each stage to the lowest-latency eligible worker.
+
+    For each stage in topological order, evaluate all workers and pick
+    the one that minimises the sum of network latencies to already-placed
+    predecessors. Ties are broken by lower node_id for determinism.
+
+    Args:
+        dag: The pipeline DAG.
+        topology: Network topology.
+        governance: Governance policy.
+
+    Returns:
+        Placement dict {stage_id: node_id}.
+
+    Raises:
+        RuntimeError: If no feasible worker exists for a stage.
+    """
+    placement: dict[str, str] = {}
+    additional_load: dict[str, float] = {}
+
+    for stage_id in dag.topological_sort():
+        stage = dag.get_stage(stage_id)
+        best_node: Optional[str] = None
+        best_latency = math.inf
+
+        for node in topology.nodes:
+            committed = additional_load.get(node.node_id, 0.0)
+            residual = node.residual_capacity - committed
+            if residual < stage.computational_demand - 1e-9:
+                continue
+            if not _is_node_feasible_simple(stage, node, governance):
+                continue
+
+            # Sum latencies to already-placed predecessors
+            lat_sum = 0.0
+            for pred_id in dag.predecessors(stage_id):
+                if pred_id in placement:
+                    pred_node_id = placement[pred_id]
+                    lat_sum += topology.latency(pred_node_id, node.node_id)
+
+            # Also add the worker's own compute time for this stage type
+            # if available, to make latency-greedy prefer faster workers
+            if node.compute_times and stage.stage_type in node.compute_times:
+                lat_sum += node.compute_times[stage.stage_type]
+
+            if lat_sum < best_latency or (
+                lat_sum == best_latency and (best_node is None or node.node_id < best_node)
+            ):
+                best_latency = lat_sum
+                best_node = node.node_id
+
+        if best_node is None:
+            raise RuntimeError(
+                f"No feasible worker for stage '{stage_id}' in latency-greedy placement."
+            )
+
+        placement[stage_id] = best_node
+        additional_load[best_node] = (
+            additional_load.get(best_node, 0.0) + stage.computational_demand
+        )
+
+    return placement
+
+
+def spillover_placement(
+    dag: PipelineDAG,
+    topology: NetworkTopology,
+    governance: GovernancePolicy,
+    local_domain: str,
+) -> dict[str, str]:
+    """Place on local domain first, overflow to remote if local is full.
+
+    For each stage in topological order, try to place on a local-domain
+    worker with capacity. If no local worker has capacity, place on the
+    first remote worker that has capacity (spillover).
+
+    Args:
+        dag: The pipeline DAG.
+        topology: Network topology.
+        governance: Governance policy.
+        local_domain: Preferred local domain.
+
+    Returns:
+        Placement dict {stage_id: node_id}.
+
+    Raises:
+        RuntimeError: If no worker (local or remote) has capacity.
+    """
+    local_workers = [n for n in topology.nodes if n.domain_id == local_domain]
+    remote_workers = [n for n in topology.nodes if n.domain_id != local_domain]
+
+    placement: dict[str, str] = {}
+    additional_load: dict[str, float] = {}
+
+    for stage_id in dag.topological_sort():
+        stage = dag.get_stage(stage_id)
+        placed = False
+
+        # Try local first
+        for worker in local_workers:
+            committed = additional_load.get(worker.node_id, 0.0)
+            residual = worker.residual_capacity - committed
+            if residual >= stage.computational_demand - 1e-9:
+                if _is_node_feasible_simple(stage, worker, governance):
+                    placement[stage_id] = worker.node_id
+                    additional_load[worker.node_id] = committed + stage.computational_demand
+                    placed = True
+                    break
+
+        # Spillover to remote
+        if not placed:
+            for worker in remote_workers:
+                committed = additional_load.get(worker.node_id, 0.0)
+                residual = worker.residual_capacity - committed
+                if residual >= stage.computational_demand - 1e-9:
+                    if _is_node_feasible_simple(stage, worker, governance):
+                        placement[stage_id] = worker.node_id
+                        additional_load[worker.node_id] = committed + stage.computational_demand
+                        placed = True
+                        break
+
+        if not placed:
+            raise RuntimeError(
+                f"No feasible worker for stage '{stage_id}' in spillover placement."
+            )
+
+    return placement

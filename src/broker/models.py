@@ -42,6 +42,7 @@ class RegisterRequest(BaseModel):
     slice_id: str
     capacity: float
     url: str = ""  # Optional; workers may omit if they call from their own URL
+    bid_cost_ms: float = 0.0  # Market-mode: advertised processing cost per stage (ms)
 
 
 class RegisterResponse(BaseModel):
@@ -95,6 +96,7 @@ class WorkerInfo:
     capacity: float
     url: str
     current_load: float = 0.0
+    bid_cost_ms: float = 0.0  # Market-mode: advertised processing cost per stage (ms)
 
 
 @dataclass

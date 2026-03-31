@@ -66,6 +66,46 @@ EXPERIMENTS: dict[str, dict] = {
         "strategies": ["S1", "S2", "S3"],
         "default_strategy": ["S3"],
     },
+    "market": {
+        "description": "Market-based allocation (4-domain O-RAN, 2+2 edge/cloud topology)",
+        "configs": [
+            # --- Allocation strategies (run at all 3 pipeline types x 3 loads) ---
+            "oracle-global",       # single broker, full visibility across all 4 domains
+            "market-quad",         # 4 federated brokers, price-signal coordination
+            "locality-only",       # each domain handles own traffic, no cross-domain
+            "latency-greedy",      # always pick lowest-latency worker (allows cross-domain)
+            "spillover",           # local-first, overflow to other site when full
+        ],
+        "seeds": DEFAULT_SEEDS,
+        "transports": ["http"],
+        "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
+        "loads": ["low", "medium", "high"],  # 2, 5, 10 pps
+        # 5 strategies x 3 pipelines x 3 loads x 5 seeds = 225 runs
+        "notes": (
+            "4-domain O-RAN topology: DU (VM1) + CU/near-RT-RIC (VM2) = edge site; "
+            "non-RT-RIC (VM3) + SMO (VM4) = cloud site. 1 WAN link (50ms) between sites. "
+            "48 workers total (12 per domain). Tests Paper 2 Walrasian convergence prediction."
+        ),
+    },
+    "governance": {
+        "description": "Governance composition (edge-vs-cloud enforcement, TEAC prediction)",
+        "configs": [
+            "gov-none",            # neither site enforces data sovereignty
+            "gov-edge-only",       # edge site enforces, cloud does not
+            "gov-cloud-only",      # cloud enforces, edge does not
+            "gov-both",            # both sites enforce
+        ],
+        "seeds": DEFAULT_SEEDS,
+        "transports": ["http"],
+        "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
+        "loads": ["medium"],  # 5 pps only (sufficient for composition test)
+        # 4 scenarios x 3 pipelines x 1 load x 5 seeds = 60 runs
+        "notes": (
+            "Tests TEAC supermodularity prediction: partial governance is worse than "
+            "both-enforce or neither-enforce. Edge = DU+CU enforce raw data sovereignty; "
+            "Cloud = non-RT-RIC+SMO enforce model output sovereignty."
+        ),
+    },
     "stress": {
         "description": "Combined H3+H6 contention + failure",
         "configs": [
@@ -202,7 +242,7 @@ def expected_run_count(
         )
         return n_configs * n_strategies * n_seeds
 
-    if canonical in ("contention", "federation", "stress"):
+    if canonical in ("contention", "federation", "stress", "market"):
         return n_configs * n_seeds
 
     # baseline: not a simple product; caller should use build_run_matrix

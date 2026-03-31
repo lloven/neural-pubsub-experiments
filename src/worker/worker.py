@@ -26,6 +26,107 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Tiered worker capabilities
+# ---------------------------------------------------------------------------
+
+
+class Tier:
+    """Capability tier constants."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    IMPOSSIBLE = "impossible"
+
+    _VALID = {PRIMARY, SECONDARY, IMPOSSIBLE}
+
+    @classmethod
+    def validate(cls, tier: str) -> str:
+        if tier not in cls._VALID:
+            raise ValueError(
+                f"Invalid tier '{tier}'. Must be one of: {cls._VALID}"
+            )
+        return tier
+
+
+@dataclass
+class Capability:
+    """A worker's capability for one stage type.
+
+    Attributes:
+        tier: PRIMARY (fast), SECONDARY (slow), or IMPOSSIBLE (rejected).
+        compute_ms: Processing time in milliseconds. None for IMPOSSIBLE.
+    """
+
+    tier: str
+    compute_ms: Optional[float] = None
+
+    @staticmethod
+    def resolve_compute_ms(
+        capabilities: dict[str, "Capability"], stage_type: str
+    ) -> Optional[float]:
+        """Return compute time for a stage type, or None for legacy fallback.
+
+        Returns None if:
+        - capabilities is empty (no tiered config → use legacy processing_speed)
+        - stage_type not in capabilities (unknown → legacy fallback)
+        - tier is IMPOSSIBLE (worker should reject this stage)
+        """
+        if not capabilities:
+            return None
+        cap = capabilities.get(stage_type)
+        if cap is None:
+            return None  # Unknown stage → legacy fallback
+        if cap.tier == Tier.IMPOSSIBLE:
+            return None
+        return cap.compute_ms
+
+    @staticmethod
+    def can_execute(
+        capabilities: dict[str, "Capability"], stage_type: str
+    ) -> bool:
+        """Return True if the worker can execute this stage type.
+
+        Returns True if:
+        - capabilities is empty (no tiered config → accept everything)
+        - stage_type not in capabilities (unknown → accept, backward compat)
+        - tier is PRIMARY or SECONDARY
+        Returns False only if tier is IMPOSSIBLE.
+        """
+        if not capabilities:
+            return True
+        cap = capabilities.get(stage_type)
+        if cap is None:
+            return True  # Unknown stage → accept (backward compat)
+        return cap.tier != Tier.IMPOSSIBLE
+
+
+def parse_capabilities(raw: Optional[str]) -> dict[str, Capability]:
+    """Parse WORKER_CAPABILITIES JSON into a dict of Capability objects.
+
+    Args:
+        raw: JSON string or None/empty. Format:
+            {"stage_type": {"tier": "primary|secondary|impossible", "compute_ms": 50}}
+
+    Returns:
+        Dict mapping stage_type to Capability. Empty dict if raw is None/empty.
+
+    Raises:
+        ValueError: If a tier value is not recognized.
+    """
+    if not raw:
+        return {}
+    import json as _json
+
+    data = _json.loads(raw)
+    result = {}
+    for stage_type, spec in data.items():
+        tier = Tier.validate(spec["tier"])
+        compute_ms = spec.get("compute_ms")
+        result[stage_type] = Capability(tier=tier, compute_ms=compute_ms)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Configuration and data classes
 # ---------------------------------------------------------------------------
 
@@ -53,6 +154,8 @@ class WorkerConfig:
     broker_url: str
     processing_speed: float = 1.0
     port: int = 8081
+    bid_cost_ms: float = 0.0  # Market-mode: advertised processing cost per stage (ms)
+    callback_url: str = ""  # Explicit callback URL for host networking; empty = auto from port
 
 
 @dataclass
@@ -167,6 +270,27 @@ class Worker:
         self._http_client: Optional[httpx.AsyncClient] = None
         self._app = self._build_app()
 
+    @property
+    def local_url(self) -> str:
+        """Return the worker's local URL (localhost + configured port)."""
+        return f"http://localhost:{self.config.port}"
+
+    def registration_payload(self) -> dict:
+        """Build the registration payload for the broker.
+
+        Includes callback URL (explicit or auto-generated from port)
+        and bid_cost_ms for market-mode allocation.
+        """
+        url = self.config.callback_url or self.local_url
+        return {
+            "node_id": self.config.node_id,
+            "domain_id": self.config.domain_id,
+            "slice_id": self.config.slice_id,
+            "capacity": self.config.capacity,
+            "url": url,
+            "bid_cost_ms": self.config.bid_cost_ms,
+        }
+
     # ------------------------------------------------------------------
     # FastAPI application
     # ------------------------------------------------------------------
@@ -230,12 +354,7 @@ class Worker:
             httpx.HTTPStatusError: If the broker returns a non-2xx status.
             httpx.RequestError: If the broker is unreachable.
         """
-        payload = {
-            "node_id": self.config.node_id,
-            "domain_id": self.config.domain_id,
-            "slice_id": self.config.slice_id,
-            "capacity": self.config.capacity,
-        }
+        payload = self.registration_payload()
         if self._http_client is None:
             raise RuntimeError("Worker not started; call run() first.")
         response = await self._http_client.post(
@@ -493,6 +612,19 @@ def _parse_args():
         default=8081,
         help="Port for the worker HTTP server (default 8081).",
     )
+    parser.add_argument(
+        "--callback-url",
+        default="",
+        dest="callback_url",
+        help="Explicit callback URL for host networking (default: auto from port).",
+    )
+    parser.add_argument(
+        "--bid-cost",
+        type=float,
+        default=0.0,
+        dest="bid_cost_ms",
+        help="Market-mode advertised processing cost per stage in ms (default 0.0).",
+    )
     return parser.parse_args()
 
 
@@ -508,6 +640,8 @@ def main() -> None:
         broker_url=args.broker_url,
         processing_speed=args.processing_speed,
         port=args.port,
+        callback_url=args.callback_url,
+        bid_cost_ms=args.bid_cost_ms,
     )
     worker = Worker(config)
     asyncio.run(worker.run())
