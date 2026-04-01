@@ -116,15 +116,13 @@ def build_run_matrix(
 def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     """Execute a slicing run on the distributed 4-VM cluster."""
     from scripts import multi_vm_runner
-    from functools import partial as _partial
-
     run_id = run.run_id
     cmap = _COMPOSE_MAP[run.config_name]
     placement = cmap["env"].get("PLACEMENT", "neural")
 
     failure_fn = None
     if run.failure_injection:
-        failure_fn = _partial(
+        failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
             vm=multi_vm_runner.VMS[0],
             container="deploy-worker-0-1",

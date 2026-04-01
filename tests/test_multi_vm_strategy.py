@@ -150,4 +150,7 @@ def test_run_single_passes_workload_env(mock_ssh, mock_start, mock_stop,
     )
     calls = [str(c) for c in mock_ssh.call_args_list]
     ssh_cmds = " ".join(calls)
-    assert "PIPELINE_MIX_CQI" in ssh_cmds or True  # dry_run may not call SSH for workload
+    # dry_run logs SSH commands via logger, so they appear in mock_ssh calls
+    assert "PIPELINE_MIX_CQI" in ssh_cmds, (
+        f"Workload env PIPELINE_MIX_CQI not found in SSH commands: {ssh_cmds[:300]}"
+    )

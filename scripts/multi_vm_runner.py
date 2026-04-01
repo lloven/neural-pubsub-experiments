@@ -106,7 +106,6 @@ def inject_remote_kill(
     in a daemon thread from run_single().
     """
     if delay_s > 0 and not dry_run:
-        import time
         time.sleep(delay_s)
     _ssh(vm.ssh_host, f"docker kill {container}", dry_run=dry_run)
 
@@ -124,7 +123,6 @@ def inject_remote_partition(
     rather than a selective network drop.
     """
     if delay_s > 0 and not dry_run:
-        import time
         time.sleep(delay_s)
     _ssh(vm_dst.ssh_host, "docker stop deploy-broker-1", dry_run=dry_run)
 
@@ -133,8 +131,14 @@ def inject_remote_partition(
 # SSH helpers
 # ---------------------------------------------------------------------------
 
-def _ssh(host: str, cmd: str, dry_run: bool = False, timeout: int = 60) -> str:
-    """Execute a command on a remote host via SSH."""
+def _ssh(host: str, cmd: str, dry_run: bool = False, timeout: int = 60,
+         check: bool = False) -> str:
+    """Execute a command on a remote host via SSH.
+
+    Args:
+        check: If True, raise subprocess.CalledProcessError on non-zero exit.
+               Use for critical operations (start_cluster, workload).
+    """
     full_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", host, cmd]
     if dry_run:
         logger.info("[DRY RUN] %s: %s", host, cmd)
@@ -143,6 +147,9 @@ def _ssh(host: str, cmd: str, dry_run: bool = False, timeout: int = 60) -> str:
     result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         logger.error("SSH failed on %s: %s", host, result.stderr)
+        if check:
+            raise subprocess.CalledProcessError(result.returncode, full_cmd,
+                                                 result.stdout, result.stderr)
     return result.stdout
 
 
