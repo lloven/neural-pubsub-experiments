@@ -311,6 +311,22 @@ stop)
     ok "All stopped."
     ;;
 
+# --- Restart (stop + resume) -------------------------------------------------
+restart)
+    info "Restarting: stopping all containers, then resuming experiments ..."
+    # Stop all containers (local + distributed)
+    rcmd "docker compose -f docker-compose.local.yaml down --remove-orphans" 2>/dev/null || true
+    python3 -m scripts.multi_vm_runner --stop 2>/dev/null || true
+    ok "Containers stopped. Re-launching with --resume ..."
+    # Re-run all phases with --resume to skip completed runs
+    for phase in baseline contention slicing federation resilience stress; do
+        info "Resuming $phase ..."
+        PY_CMD="python3 -m scripts.run_$phase --topology distributed --resume $(py_warmup) $(py_measurement)"
+        rcmd "$PY_CMD" || warn "$phase failed or had errors"
+    done
+    ok "All phases resumed."
+    ;;
+
 # --- Status ------------------------------------------------------------------
 status)
     # Monitor always runs LOCALLY (reads remote data via SSH when --remote)
@@ -351,7 +367,8 @@ Commands:
   resilience [--resume]   Failure resilience (was Phase D)
   stress [--resume]       Combined contention + failure (60 runs, was Phase E)
   single CONFIG RATE STAGES SEED   Single run
-  stop                    Stop all containers
+  stop                    Stop all containers (local + distributed)
+  restart                 Stop + resume all phases with --topology distributed
   status                  Show progress for all phases
   sync                    Push code + rebuild on remote (no experiments)
 
