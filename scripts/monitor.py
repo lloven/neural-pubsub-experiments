@@ -846,11 +846,19 @@ def main():
                 if once_mode:
                     break
 
-                # Check if everything is finished
+                # Check if everything is finished — only auto-exit when
+                # there are active .progress.json files with queued/running entries.
+                # Without this guard, the monitor exits prematurely between phases
+                # (e.g., baseline done, contention not yet started by orchestrator).
                 grand_total = sum(s["total"] for s in summaries)
                 grand_running = sum(s["running"] for s in summaries)
                 grand_queued = sum(s["queued"] for s in summaries)
-                if grand_total > 0 and grand_running == 0 and grand_queued == 0:
+                has_active_progress = any(
+                    load_progress(results_root / p) for p in
+                    discover_phases(results_root, remote_host=remote_host)
+                )
+                if (grand_total > 0 and grand_running == 0 and grand_queued == 0
+                        and has_active_progress):
                     print("  All experiments complete!")
                     break
 
