@@ -329,14 +329,11 @@ restart)
 
 # --- Status ------------------------------------------------------------------
 status)
-    # Monitor always runs LOCALLY (reads remote data via SSH when --remote)
     remote_flag=""
     if [[ -n "$REMOTE_MODE" ]]; then
         remote_flag="--remote $TARGET_HOST"
     fi
-    for phase in baseline placement slicing federation resilience stress contention; do
-        python3 -m scripts.monitor --once $remote_flag "results/$phase" 2>/dev/null || true
-    done
+    python3 -m scripts.monitor --all --distributed --once $remote_flag
     ;;
 
 # --- Sync (push + rebuild, no experiments) -----------------------------------
