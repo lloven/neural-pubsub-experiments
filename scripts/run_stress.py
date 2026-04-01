@@ -151,7 +151,8 @@ def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
         )
 
     multi_vm_runner.run_single(
-        config=run_id,
+        config=run.config_name,
+        run_id=run_id,
         seed=run.seed,
         placement_mode=strat_env.get("PLACEMENT_STRATEGY", "neural"),
         governance_config="all",
@@ -166,7 +167,7 @@ def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
         dry_run=dry_run,
     )
     return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
-            "result_file": f"results/stress/{run_id}.csv"}
+            "result_file": f"results/stress/{run_id}"}
 
 
 def _run(run: StressRunConfig, dry_run: bool, **kwargs) -> dict:

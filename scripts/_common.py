@@ -596,6 +596,59 @@ def _update_progress(
     _save_progress(results_dir, progress)
 
 
+def _discover_completed_runs(results_dir: Path) -> dict:
+    """Discover completed runs from CSV files and distributed directories on disk.
+
+    Used as a fallback when .progress.json is missing or incomplete during
+    --resume. Finds:
+    - {run_id}.csv files (local single-host results)
+    - {run_id}/vm1/ directories (distributed multi-VM results)
+    """
+    completed = {}
+    if not results_dir.is_dir():
+        return completed
+
+    for entry in results_dir.iterdir():
+        name = entry.stem if entry.is_file() else entry.name
+
+        # Skip partials, summaries, hidden, progress files
+        if name.startswith(".") or name.startswith("_") or "summary" in name:
+            continue
+        if entry.is_file() and ".partial" in entry.name:
+            continue
+
+        if entry.is_file() and entry.suffix == ".csv":
+            completed[name] = {
+                "status": "done",
+                "detail": str(entry),
+                "timestamp": "",
+            }
+        elif entry.is_dir():
+            # Check for distributed layout (vm*/ children)
+            vm_children = [c for c in entry.iterdir() if c.is_dir() and c.name.startswith("vm")]
+            if vm_children:
+                completed[entry.name] = {
+                    "status": "done",
+                    "detail": str(entry),
+                    "timestamp": "",
+                }
+
+    return completed
+
+
+def _reset_stale_running(progress: dict) -> dict:
+    """Reset 'running' entries to 'queued' (for crash recovery on --resume).
+
+    When a previous run crashed, entries with status 'running' are stale.
+    Resetting them to 'queued' ensures they are re-executed and the monitor
+    doesn't show perpetually running experiments.
+    """
+    for run_id, info in progress.items():
+        if info.get("status") == "running":
+            info["status"] = "queued"
+    return progress
+
+
 # ---------------------------------------------------------------------------
 # Shared main() loop
 # ---------------------------------------------------------------------------
@@ -703,7 +756,17 @@ def phase_main(
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # Load existing progress for checkpointing
-    progress = _load_progress(results_dir) if args.resume else {}
+    if args.resume:
+        progress = _load_progress(results_dir)
+        # T5: Reset stale "running" entries from crashed runs
+        progress = _reset_stale_running(progress)
+        # T4: Merge with on-disk discovery for crash recovery
+        disk_completed = _discover_completed_runs(results_dir)
+        for run_id, info in disk_completed.items():
+            if run_id not in progress or progress[run_id].get("status") != "done":
+                progress[run_id] = info
+    else:
+        progress = {}
 
     logger.info("%s: %d runs planned", phase_name, len(runs))
     if args.dry_run:

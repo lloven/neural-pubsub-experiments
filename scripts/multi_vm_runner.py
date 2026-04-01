@@ -296,10 +296,11 @@ def run_single(
     results_subdir: str = "market",
     failure_fn: object | None = None,
     wan_emulation: bool = True,
+    run_id: str | None = None,
     dry_run: bool = False,
 ) -> None:
     """Execute a single experiment run on the 4-VM cluster."""
-    run_id = f"{config}_seed-{seed}"
+    run_id = run_id or f"{config}_seed-{seed}"
     logger.info("=== Run: %s (placement=%s, governance=%s, broker=%s) ===",
                 run_id, placement_mode, governance_config,
                 broker_module or "neural_broker")

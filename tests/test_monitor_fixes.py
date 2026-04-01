@@ -387,7 +387,57 @@ def test_monitor_reads_progress_from_distributed_runs(tmp_path):
     assert summary["eta_s"] > 0
 
 
-# ── Test 10: --distributed flag ────────────────────────────────────────
+# ── Test 10: discover distributed run directories ──────────────────────
+
+def test_discover_progress_finds_distributed_run_dirs(tmp_path):
+    """Merged progress must detect distributed run directories
+    (subdirs with vm1/vm2/... inside) as completed runs."""
+    from scripts.monitor import (
+        _discover_progress_from_csvs, _discover_distributed_runs, merge_progress,
+    )
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+
+    # Simulate 3 completed distributed runs (each has vm1/ subdir)
+    for run_name in ["rr_seed-42", "rr_seed-123", "neural_seed-42"]:
+        run_dir = phase_dir / run_name / "vm1"
+        run_dir.mkdir(parents=True)
+
+    # One old-style direct CSV
+    (phase_dir / "old_run.csv").write_text("header\nrow1\n")
+
+    progress = merge_progress(
+        _discover_progress_from_csvs(phase_dir),
+        _discover_distributed_runs(phase_dir),
+    )
+
+    assert "old_run" in progress, "Should find direct CSV"
+    assert "rr_seed-42" in progress, "Should find distributed run dir"
+    assert "rr_seed-123" in progress, "Should find distributed run dir"
+    assert "neural_seed-42" in progress, "Should find distributed run dir"
+    assert len(progress) == 4
+    assert all(v["status"] == "done" for v in progress.values())
+
+
+def test_phase_summary_counts_distributed_runs(tmp_path):
+    """phase_summary must count distributed run directories as done runs."""
+    from scripts.monitor import phase_summary
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+
+    # 3 completed distributed runs + empty .progress.json
+    for run_name in ["run_a", "run_b", "run_c"]:
+        (phase_dir / run_name / "vm1").mkdir(parents=True)
+
+    summary = phase_summary(phase_dir)
+    assert summary["done"] == 3
+    assert summary["total"] == 3
+    assert summary["fraction"] == 1.0
+
+
+# ── Test 11: --distributed flag ────────────────────────────────────────
 
 def test_distributed_flag_accepted():
     """Monitor argparser must accept --distributed flag."""
