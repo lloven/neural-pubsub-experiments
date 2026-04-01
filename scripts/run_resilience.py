@@ -182,8 +182,6 @@ def _make_failure_fn(
 def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     """Execute a resilience run on the distributed 4-VM cluster."""
     from scripts import multi_vm_runner
-    from functools import partial as _partial
-
     run_id = run.run_id
     cfg = CONFIGS[run.config_name]
     strat_env = _strategy_env(run.strategy)
@@ -196,7 +194,7 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     failure_fn = None
     if run.failure_type == "worker":
         # Kill a worker on VM1 (domain 1)
-        failure_fn = _partial(
+        failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
             vm=multi_vm_runner.VMS[0],
             container="deploy-worker-0-1",

@@ -95,6 +95,10 @@ class RunConfig:
     warmup_s: int = 120
     measurement_s: int = 600
 
+    @property
+    def run_id(self) -> str:
+        return f"{self.config_name}_rate-medium_seed-{self.seed}"
+
 
 def build_run_matrix(
     configs: list[str],
@@ -119,9 +123,7 @@ def build_run_matrix(
 def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     """Execute a federation run on the distributed 4-VM cluster."""
     from scripts import multi_vm_runner
-    from functools import partial
-
-    run_id = f"{run.config_name}_rate-medium_seed-{run.seed}"
+    run_id = run.run_id
 
     failure_fn = None
     if run.broker_failure:

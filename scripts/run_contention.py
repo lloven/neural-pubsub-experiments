@@ -77,6 +77,10 @@ class ContentionRunConfig:
     measurement_s: int = 600
     failure_delay_s: int = 300  # 5min from run start; consistent with resilience phase
 
+    @property
+    def run_id(self) -> str:
+        return f"{self.config_name}_seed-{self.seed}"
+
 
 def build_contention_matrix(
     configs: list[str],
@@ -107,9 +111,7 @@ def build_contention_matrix(
 def _run_contention_distributed(run: ContentionRunConfig, dry_run: bool) -> dict:
     """Execute a contention run on the distributed 4-VM cluster."""
     from scripts import multi_vm_runner
-    from functools import partial
-
-    run_id = f"{run.config_name}_seed-{run.seed}"
+    run_id = run.run_id
 
     failure_fn = None
     if run.failure == FAILURE_KILL_WORKERS:
@@ -198,76 +200,14 @@ def _run_contention(run: ContentionRunConfig, dry_run: bool, **kwargs) -> dict:
 
 
 def main():
-    """Run contention experiments."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Contention: Resource contention under overload"
+    phase_main(
+        phase_name="Contention",
+        description="Contention: Resource contention under overload",
+        configs=CONTENTION_CONFIGS,
+        build_matrix_fn=build_contention_matrix,
+        run_fn=_run_contention,
+        results_dir=RESULTS_DIR,
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print runs without executing")
-    parser.add_argument(
-        "--configs", default=",".join(CONTENTION_CONFIGS.keys()),
-        help="Comma-separated config names (default: all)",
-    )
-    parser.add_argument(
-        "--seeds", default=",".join(str(s) for s in DEFAULT_SEEDS),
-        help=f"Comma-separated seeds (default: {DEFAULT_SEEDS})",
-    )
-    parser.add_argument("--warmup", type=int, default=None,
-                        help="Override warmup_s (default: 120)")
-    parser.add_argument("--measurement", type=int, default=None,
-                        help="Override measurement_s (default: 600)")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING"])
-
-    args = parser.parse_args()
-    logging.basicConfig(level=getattr(logging, args.log_level))
-
-    logger.info("=" * 60)
-    logger.info("Contention: Resource contention under overload")
-    logger.info("=" * 60)
-
-    config_names = [c.strip() for c in args.configs.split(",")]
-    seeds = [int(s.strip()) for s in args.seeds.split(",")]
-
-    for c in config_names:
-        if c not in CONTENTION_CONFIGS:
-            parser.error(
-                f"Unknown config: {c}. Valid: {list(CONTENTION_CONFIGS.keys())}"
-            )
-
-    runs = build_contention_matrix(
-        config_names, seeds,
-        warmup_s=args.warmup,
-        measurement_s=args.measurement,
-    )
-    logger.info("Contention: %d runs planned", len(runs))
-
-    if args.dry_run:
-        logger.info("[DRY RUN MODE]")
-
-    results = []
-    for i, run in enumerate(runs, 1):
-        logger.info("--- Contention Run %d/%d ---", i, len(runs))
-        result = _run_contention(run, args.dry_run)
-        results.append(result)
-
-    # Write summary CSV
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    summary_file = RESULTS_DIR / "contention_summary.csv"
-    with open(summary_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["run_id", "status", "result_file"])
-        writer.writeheader()
-        writer.writerows(results)
-    logger.info("Contention summary: %s", summary_file)
-
-    completed = sum(1 for r in results if r["status"] == "completed")
-    failed = sum(1 for r in results if r["status"] not in ("completed", "dry_run"))
-    logger.info(
-        "Contention complete: %d/%d runs successful, %d failed",
-        completed, len(runs), failed,
-    )
-
-    logger.info("Done.")
 
 
 if __name__ == "__main__":

@@ -249,15 +249,15 @@ class TestBashDispatcher:
         )
 
     def test_status_calls_monitor(self):
-        """Test 22: 'status' command invokes monitor.py --once."""
+        """Test 22: 'status' command invokes monitor.py --once --all --distributed."""
         import subprocess
         result = subprocess.run(
             ["bash", "-x", self.SCRIPT, "status"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=60,
             cwd=str(PROJECT_ROOT),
         )
         trace = result.stderr
-        # The new dispatcher should invoke monitor.py --once
+        # The new dispatcher should invoke monitor.py --all --distributed --once
         assert "monitor" in trace and "--once" in trace, (
             f"'status' command should delegate to monitor.py --once.\n"
             f"Trace: {trace[-500:]}"

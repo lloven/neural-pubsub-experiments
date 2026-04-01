@@ -136,8 +136,6 @@ def build_run_matrix(
 def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
     """Execute a stress run on the distributed 4-VM cluster."""
     from scripts import multi_vm_runner
-    from functools import partial as _partial
-
     run_id = run.run_id
     strat_env = _strategy_env(run.strategy)
 
