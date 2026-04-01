@@ -437,7 +437,47 @@ def test_phase_summary_counts_distributed_runs(tmp_path):
     assert summary["fraction"] == 1.0
 
 
-# ── Test 11: --distributed flag ────────────────────────────────────────
+# ── Test 11: auto-exit guard ────────────────────────────────────────────
+
+def test_monitor_does_not_exit_when_no_active_progress(tmp_path):
+    """Monitor must NOT auto-exit when all progress comes from CSV discovery
+    (no .progress.json with running/queued entries). This prevents premature
+    exit between phases when the orchestrator is still running."""
+    from scripts.monitor import load_progress, discover_phases
+
+    # Phase with only CSV-discovered results (no .progress.json)
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+    (phase_dir / "run_a.csv").write_text("header\nrow\n")
+    (phase_dir / "run_b.csv").write_text("header\nrow\n")
+
+    # No .progress.json exists
+    assert not (phase_dir / ".progress.json").exists()
+
+    # load_progress returns empty → has_active_progress is False
+    progress = load_progress(phase_dir)
+    assert not progress, "No .progress.json should mean no active progress"
+
+
+def test_monitor_exits_when_progress_shows_all_done(tmp_path):
+    """Monitor should auto-exit when .progress.json exists and all entries are done."""
+    from scripts.monitor import load_progress
+
+    phase_dir = tmp_path / "baseline"
+    phase_dir.mkdir()
+
+    progress = {
+        "run_a": {"status": "done", "timestamp": "2026-04-01T10:00:00"},
+        "run_b": {"status": "done", "timestamp": "2026-04-01T10:12:00"},
+    }
+    (phase_dir / ".progress.json").write_text(json.dumps(progress))
+
+    loaded = load_progress(phase_dir)
+    assert loaded, "Active .progress.json should be truthy"
+    assert all(v["status"] == "done" for v in loaded.values())
+
+
+# ── Test 12: --distributed flag ────────────────────────────────────────
 
 def test_distributed_flag_accepted():
     """Monitor argparser must accept --distributed flag."""
