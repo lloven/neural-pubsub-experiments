@@ -89,6 +89,22 @@ def _cleanup_current_project(signum: int, frame: Any) -> None:
     sys.exit(128 + signum)
 
 
+def _cleanup_distributed(signum: int, frame: Any) -> None:
+    """Signal handler that tears down the distributed 4-VM cluster.
+
+    Registered for SIGTERM and SIGINT in :func:`phase_main` when
+    ``--topology distributed`` is active. Calls stop_cluster() to
+    SSH into all VMs and docker compose down.
+    """
+    logger.warning("Signal %d received — stopping distributed cluster", signum)
+    try:
+        from scripts.multi_vm_runner import stop_cluster
+        stop_cluster()
+    except Exception as e:
+        logger.error("Distributed cleanup failed: %s", e)
+    sys.exit(128 + signum)
+
+
 # Transport modes for the factorial experiment.
 TRANSPORTS = ["http", "kafka"]
 
@@ -722,8 +738,12 @@ def phase_main(
     logging.basicConfig(level=getattr(logging, args.log_level))
 
     # Register signal handlers for graceful cleanup on interruption.
-    signal.signal(signal.SIGTERM, _cleanup_current_project)
-    signal.signal(signal.SIGINT, _cleanup_current_project)
+    if args.topology == "distributed":
+        signal.signal(signal.SIGTERM, _cleanup_distributed)
+        signal.signal(signal.SIGINT, _cleanup_distributed)
+    else:
+        signal.signal(signal.SIGTERM, _cleanup_current_project)
+        signal.signal(signal.SIGINT, _cleanup_current_project)
 
     config_names = [c.strip() for c in args.configs.split(",")]
     seeds = [int(s.strip()) for s in args.seeds.split(",")]
