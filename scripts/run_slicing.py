@@ -134,7 +134,8 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     gov_config = "all" if run.governance else "none"
 
     multi_vm_runner.run_single(
-        config=run_id,
+        config=run.config_name,
+        run_id=run_id,
         seed=run.seed,
         placement_mode=placement if placement != "round_robin" else "neural",
         governance_config=gov_config,
@@ -153,7 +154,7 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
         dry_run=dry_run,
     )
     return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
-            "result_file": f"results/slicing/{run_id}.csv"}
+            "result_file": f"results/slicing/{run_id}"}
 
 
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:

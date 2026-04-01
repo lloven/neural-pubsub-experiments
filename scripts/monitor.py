@@ -60,6 +60,15 @@ def mini_bar(fraction: float, width: int = 15) -> str:
     return f"[{bar}]"
 
 
+def format_run_eta(elapsed_s: float, expected_s: float) -> str:
+    """Format per-run ETA with OVERDUE indicator for stalled runs."""
+    if elapsed_s > expected_s * 1.5:
+        excess = elapsed_s - expected_s
+        return f"OVERDUE +{format_time(excess)}"
+    remaining = max(0, expected_s - elapsed_s)
+    return format_time(remaining)
+
+
 def _discover_progress_from_csvs(
     results_dir: Path, remote_host: str | None = None
 ) -> dict:
@@ -90,6 +99,51 @@ def _discover_progress_from_csvs(
         else:
             progress[name] = {"status": "done", "timestamp": ""}
     return progress
+
+
+def _discover_distributed_runs(
+    results_dir: Path, remote_host: str | None = None,
+) -> dict:
+    """Detect completed distributed runs by finding subdirs with vm*/ children."""
+    progress = {}
+    if remote_host:
+        try:
+            result = subprocess.run(
+                ["ssh", remote_host, f"ls -d {results_dir}/*/vm1/ 2>/dev/null"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                # /path/to/results/baseline/run_id/vm1/ → run_id
+                parts = line.rstrip("/").split("/")
+                if len(parts) >= 2:
+                    run_id = parts[-2]
+                    progress[run_id] = {"status": "done", "timestamp": ""}
+        except Exception:
+            pass
+        return progress
+
+    if not results_dir.is_dir():
+        return {}
+    for entry in results_dir.iterdir():
+        if not entry.is_dir() or entry.name.startswith(".") or entry.name.startswith("_"):
+            continue
+        # Check if this dir has vm*/ children (distributed result layout)
+        vm_children = [c for c in entry.iterdir() if c.is_dir() and c.name.startswith("vm")]
+        if vm_children:
+            progress[entry.name] = {"status": "done", "timestamp": ""}
+    return progress
+
+
+def merge_progress(*sources: dict) -> dict:
+    """Merge multiple progress dicts. First source wins per run_id."""
+    merged = {}
+    for source in sources:
+        for run_id, info in source.items():
+            if run_id not in merged:
+                merged[run_id] = info
+    return merged
 
 
 def load_progress(results_dir: Path, remote_host: str | None = None) -> dict:
@@ -515,9 +569,12 @@ def phase_summary(
     and progress (the raw progress dict).
     """
     phase_name = phase_dir.name
-    progress = load_progress(phase_dir, remote_host=remote_host)
-    if not progress:
-        progress = _discover_progress_from_csvs(phase_dir, remote_host=remote_host)
+    # Merge all progress sources: .progress.json takes precedence,
+    # then CSV files on disk, then distributed run directories.
+    progress_json = load_progress(phase_dir, remote_host=remote_host)
+    csv_progress = _discover_progress_from_csvs(phase_dir, remote_host=remote_host)
+    dist_progress = _discover_distributed_runs(phase_dir, remote_host=remote_host)
+    progress = merge_progress(progress_json, csv_progress, dist_progress)
 
     n_done = sum(1 for v in progress.values() if v.get("status") == "done")
     n_running = sum(1 for v in progress.values() if v.get("status") == "running")
@@ -525,11 +582,41 @@ def phase_summary(
     n_queued = sum(1 for v in progress.values() if v.get("status") == "queued")
     total = len(progress)
 
-    # Compute fraction with partial credit for running runs.
-    # Each running run contributes (run_elapsed / expected_duration) as partial credit.
-    # Follows the neural-router legacy monitor's weight-based fraction pattern.
     from scripts._common import DEFAULT_RUN_DURATION_S
     now = time.time()
+
+    # Collect all timestamps, filtering out stale ones from old crashes.
+    # Only use timestamps within a reasonable window of the most recent one.
+    all_ts = []
+    for info in progress.values():
+        ts = info.get("timestamp", "")
+        try:
+            t = datetime.fromisoformat(ts).timestamp()
+            all_ts.append(t)
+        except (ValueError, TypeError):
+            pass
+
+    # T7: Filter stale timestamps — keep only those within 2x DEFAULT_RUN_DURATION_S
+    # of the most recent timestamp. This prevents old crash artifacts from
+    # skewing elapsed time and ETA.
+    if all_ts:
+        newest = max(all_ts)
+        staleness_threshold = 2 * DEFAULT_RUN_DURATION_S
+        recent_ts = [t for t in all_ts if newest - t < staleness_threshold]
+        if not recent_ts:
+            recent_ts = [newest]  # at least keep the newest
+    else:
+        recent_ts = []
+
+    # Compute fraction with partial credit for running runs.
+    # Use actual_run_duration from completed runs if available, else default.
+    actual_run_duration = DEFAULT_RUN_DURATION_S
+    if n_done >= 2 and recent_ts:
+        # Estimate actual run duration from elapsed / done
+        session_start = min(recent_ts)
+        session_elapsed = now - session_start
+        actual_run_duration = session_elapsed / n_done
+
     partial_credit = 0.0
     for info in progress.values():
         if info.get("status") == "running":
@@ -537,32 +624,19 @@ def phase_summary(
             try:
                 start = datetime.fromisoformat(ts).timestamp()
                 run_elapsed = now - start
-                partial_credit += min(run_elapsed / DEFAULT_RUN_DURATION_S, 0.99)
+                partial_credit += min(run_elapsed / actual_run_duration, 0.99)
             except (ValueError, TypeError):
                 pass
 
     effective_done = n_done + partial_credit
     fraction = effective_done / total if total > 0 else 0.0
 
-    # Compute ETA from actual completed run durations.
-    # Collect timestamps to find phase start and compute avg run time.
-    all_ts = []
-    done_ts = []
-    for info in progress.values():
-        ts = info.get("timestamp", "")
-        try:
-            t = datetime.fromisoformat(ts).timestamp()
-            all_ts.append(t)
-            if info.get("status") == "done":
-                done_ts.append(t)
-        except (ValueError, TypeError):
-            pass
-
-    if effective_done > 0 and all_ts:
-        phase_start = min(all_ts)
-        elapsed = now - phase_start
+    # Compute ETA using session-aware rate.
+    if effective_done > 0 and recent_ts:
+        session_start = min(recent_ts)
+        elapsed = now - session_start
         remaining = total - effective_done
-        rate = elapsed / effective_done  # seconds per effective run
+        rate = elapsed / effective_done
         eta_s = rate * remaining
     elif total > 0:
         eta_s = (total - effective_done) * DEFAULT_RUN_DURATION_S
@@ -796,10 +870,11 @@ def main():
 
     try:
         while True:
-            progress = load_progress(results_dir, remote_host=remote_host)
-            if not progress:
-                # No .progress.json -- build progress from CSV files on disk
-                progress = _discover_progress_from_csvs(results_dir, remote_host=remote_host)
+            progress = merge_progress(
+                load_progress(results_dir, remote_host=remote_host),
+                _discover_progress_from_csvs(results_dir, remote_host=remote_host),
+                _discover_distributed_runs(results_dir, remote_host=remote_host),
+            )
 
             if progress:
                 render(results_dir, progress, remote_host=remote_host,

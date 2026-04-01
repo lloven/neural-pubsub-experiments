@@ -192,7 +192,8 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
     cmap = _COMPOSE_MAP[run.config_name]
 
     multi_vm_runner.run_single(
-        config=run.run_id,
+        config=run.config_name,
+        run_id=run.run_id,
         seed=run.seed,
         placement_mode=run.placement_strategy if run.placement_strategy != "static" else "neural",
         governance_config="none",
@@ -211,7 +212,7 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
         dry_run=dry_run,
     )
     return {"run_id": run.run_id, "status": "completed" if not dry_run else "dry_run",
-            "result_file": f"results/baseline/{run.run_id}.csv"}
+            "result_file": f"results/baseline/{run.run_id}"}
 
 
 def _run(run: RunConfig, dry_run: bool, **kwargs) -> dict:
