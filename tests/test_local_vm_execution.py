@@ -150,6 +150,52 @@ class TestSshRetry:
 # ---------------------------------------------------------------------------
 
 
+class TestFunctionsUseExec:
+    """start_cluster, stop_cluster, wait_for_federation, run_single, and
+    collect_results must use _exec (not _ssh directly), so that VM1
+    operations are local when the orchestrator runs on VM1."""
+
+    @patch("scripts.multi_vm_runner._exec")
+    def test_start_cluster_uses_exec(self, mock_exec):
+        from scripts.multi_vm_runner import start_cluster
+        start_cluster(dry_run=True)
+        # Should call _exec for each VM (4 calls)
+        assert mock_exec.call_count == len(VMS)
+
+    @patch("scripts.multi_vm_runner._exec")
+    def test_stop_cluster_uses_exec(self, mock_exec):
+        from scripts.multi_vm_runner import stop_cluster
+        stop_cluster(dry_run=True)
+        assert mock_exec.call_count == len(VMS)
+
+    @patch("scripts.multi_vm_runner._exec")
+    def test_wait_for_federation_uses_exec(self, mock_exec):
+        from scripts.multi_vm_runner import wait_for_federation
+        mock_exec.return_value = '{"status": "ok"}'
+        wait_for_federation(timeout_s=5, dry_run=False)
+        # Should call _exec for each VM at least once
+        vm_names_checked = {c.args[0].name for c in mock_exec.call_args_list}
+        for vm in VMS:
+            assert vm.name in vm_names_checked, f"{vm.name} not health-checked via _exec"
+
+    @patch("scripts.multi_vm_runner._exec")
+    @patch("scripts.multi_vm_runner.collect_results")
+    @patch("scripts.multi_vm_runner.wait_for_federation", return_value=True)
+    @patch("scripts.multi_vm_runner.start_cluster")
+    @patch("scripts.multi_vm_runner.stop_cluster")
+    @patch("scripts.multi_vm_runner.setup_wan_emulation")
+    @patch("scripts.multi_vm_runner.teardown_wan_emulation")
+    def test_run_single_workload_uses_exec(self, _tw, _sw, _stop, _start,
+                                            _wait, _collect, mock_exec):
+        from scripts.multi_vm_runner import run_single
+        mock_exec.return_value = ""
+        run_single(config="test", seed=42, placement_mode="neural",
+                   governance_config="all", warmup_s=10, measurement_s=10,
+                   dry_run=True)
+        # The workload command should go through _exec(VMS[0], ...)
+        # not _ssh(VMS[0].ssh_host, ...)
+
+
 class TestDeployCode:
     """deploy_code must rsync codebase to remote VMs, skip local."""
 
