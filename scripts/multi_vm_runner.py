@@ -270,6 +270,7 @@ def _rsync(src_host: str, src_path: str, dst_path: str, dry_run: bool = False) -
         logger.info("[DRY RUN] rsync %s:%s -> %s", src_host, src_path, dst_path)
         return
     logger.info("[RSYNC] %s:%s -> %s", src_host, src_path, dst_path)
+    os.makedirs(dst_path, exist_ok=True)
     result = subprocess.run(full_cmd, capture_output=True, text=True)
     if result.returncode not in (0, 23):  # 23 = partial transfer (permission errors)
         logger.error("rsync failed: %s", result.stderr)
@@ -507,7 +508,7 @@ def run_single(
     workload_cmd = (
         f"cd {REMOTE_PROJECT_DIR} && "
         f"mkdir -p results/{results_subdir} && "
-        f"docker run --rm --network=host "
+        f"docker run --rm --network=host --user $(id -u):$(id -g) "
         f"--entrypoint python3 "
         f"{env_flags}"
         f"-v $PWD/results:/results "

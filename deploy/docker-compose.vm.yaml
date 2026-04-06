@@ -15,6 +15,7 @@ services:
   broker:
     image: neural-pubsub:latest
     network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - ../results:/results
     entrypoint:
