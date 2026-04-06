@@ -522,10 +522,15 @@ def run_single(
     )
     _exec(VMS[0], workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
 
-    # 6. Collect results
+    # 6. Fix result file ownership (Docker writes as root)
+    if not dry_run:
+        _exec(VMS[0], f"docker run --rm -v $PWD/results:/results alpine "
+              f"chown -R $(id -u):$(id -g) /results/{results_subdir}/ 2>/dev/null || true")
+
+    # 7. Collect results
     collect_results(run_id, results_subdir=results_subdir, dry_run=dry_run)
 
-    # 7. Teardown
+    # 8. Teardown
     if wan_emulation:
         teardown_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
     stop_cluster(dry_run=dry_run)
