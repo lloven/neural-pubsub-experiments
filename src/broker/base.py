@@ -40,9 +40,12 @@ from src.measurement.harness import MetricsCollector, TimestampRecord
 from src.pipeline.dag import PipelineDAG
 from src.pipeline.patterns import (
     anomaly_detection_pipeline,
+    cqi_prediction_chain_8stage,
     cqi_prediction_pipeline,
     funnel_pipeline,
     map_pipeline,
+    ran_anomaly_detection_8stage,
+    ran_intelligence_suite_8stage,
     sensor_fusion_pipeline,
 )
 
@@ -76,6 +79,10 @@ _PIPELINE_FACTORIES: dict[str, Any] = {
         latency_bound_in=float(cfg.get("latency_bound_in", 10.0)),
         latency_bound_out=float(cfg.get("latency_bound_out", 5.0)),
     ),
+    # 8-stage O-RAN pipelines (Tier 2 market experiments)
+    "cqi_chain": lambda cfg: cqi_prediction_chain_8stage(),
+    "anomaly_sp": lambda cfg: ran_anomaly_detection_8stage(),
+    "ran_entangled": lambda cfg: ran_intelligence_suite_8stage(),
 }
 
 
