@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock, call
 
 import pytest
 
-from scripts.multi_vm_runner import VMS
+from scripts.multi_vm_runner import VMS, REMOTE_PROJECT_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -143,3 +143,74 @@ class TestSshRetry:
         with pytest.raises(subprocess.TimeoutExpired):
             _ssh("host", "cmd")  # default retries=0
         assert mock_run.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task: deploy_code rsync
+# ---------------------------------------------------------------------------
+
+
+class TestDeployCode:
+    """deploy_code must rsync codebase to remote VMs, skip local."""
+
+    @patch("scripts.multi_vm_runner._ssh")
+    @patch("subprocess.run")
+    @patch("socket.gethostname", return_value=VMS[0].name)
+    def test_rsyncs_to_remote_vms_only(self, _hostname, mock_run, mock_ssh):
+        from scripts.multi_vm_runner import deploy_code
+        mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
+        deploy_code(dry_run=False)
+        # Should rsync to VMs 2-4 (3 calls), skip VM1 (local)
+        rsync_calls = [
+            c for c in mock_run.call_args_list
+            if "rsync" in str(c)
+        ]
+        assert len(rsync_calls) == 3
+        # Verify targets are the remote VMs
+        all_args = " ".join(str(c) for c in rsync_calls)
+        assert VMS[1].ssh_host in all_args
+        assert VMS[2].ssh_host in all_args
+        assert VMS[3].ssh_host in all_args
+        assert VMS[0].ssh_host not in all_args
+
+    @patch("scripts.multi_vm_runner._ssh")
+    @patch("subprocess.run")
+    @patch("socket.gethostname", return_value=VMS[0].name)
+    def test_excludes_git_and_results(self, _hostname, mock_run, mock_ssh):
+        from scripts.multi_vm_runner import deploy_code
+        mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
+        deploy_code(dry_run=False)
+        rsync_calls = [
+            c for c in mock_run.call_args_list
+            if "rsync" in str(c)
+        ]
+        for c in rsync_calls:
+            args_str = str(c)
+            assert ".git" in args_str, "Should exclude .git"
+            assert "results" in args_str, "Should exclude results"
+
+    @patch("subprocess.run")
+    @patch("socket.gethostname", return_value=VMS[0].name)
+    def test_dry_run_no_subprocess(self, _hostname, mock_run):
+        from scripts.multi_vm_runner import deploy_code
+        deploy_code(dry_run=True)
+        # No actual rsync calls in dry-run
+        rsync_calls = [
+            c for c in mock_run.call_args_list
+            if "rsync" in str(c)
+        ]
+        assert len(rsync_calls) == 0
+
+    @patch("subprocess.run")
+    @patch("socket.gethostname", return_value=VMS[0].name)
+    def test_target_path_is_remote_project_dir(self, _hostname, mock_run):
+        from scripts.multi_vm_runner import deploy_code
+        mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
+        deploy_code(dry_run=False)
+        rsync_calls = [
+            c for c in mock_run.call_args_list
+            if "rsync" in str(c)
+        ]
+        for c in rsync_calls:
+            args_str = str(c)
+            assert REMOTE_PROJECT_DIR.lstrip("~") in args_str or "neural-pubsub" in args_str
