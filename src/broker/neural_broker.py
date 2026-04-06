@@ -419,24 +419,28 @@ class NeuralBroker:
     # Placement dispatch (Task 4)
     # ------------------------------------------------------------------
 
-    def _compute_clearing_prices(self) -> dict[str, dict[str, float]]:
-        """Compute market clearing prices from registered workers' bids.
+    def _compute_clearing_prices_from(
+        self, workers: dict[str, WorkerInfo],
+    ) -> dict[str, dict[str, float]]:
+        """Compute market clearing prices from a workers snapshot.
 
         Each worker bids on all known stage types with its bid_cost_ms.
         Demand per stage type is estimated as 1 (one stage execution per
         pipeline arrival). The clearing price = marginal cost at the
         demand quantity within each (domain, stage_type) group.
 
+        Args:
+            workers: Snapshot of the worker registry to compute bids from.
+
         Returns:
             {domain_id: {stage_type: clearing_price}}
         """
         from src.broker.market import WorkerBid, compute_clearing_prices
 
-        # Collect known stage types from pipeline templates
         known_stage_types = self._known_stage_types()
 
         bids = []
-        for w in self._workers.values():
+        for w in workers.values():
             for st in known_stage_types:
                 bid = WorkerBid(
                     worker_id=w.node_id,
@@ -447,9 +451,17 @@ class NeuralBroker:
                 )
                 bids.append(bid)
 
-        # Demand: 1 stage execution per type per pipeline arrival
         demand = {st: 1 for st in known_stage_types}
         return compute_clearing_prices(bids, demand)
+
+    def _compute_clearing_prices(self) -> dict[str, dict[str, float]]:
+        """Compute market clearing prices from the live worker registry.
+
+        Convenience wrapper around _compute_clearing_prices_from that
+        reads self._workers. Callers that already hold a workers snapshot
+        should use _compute_clearing_prices_from directly.
+        """
+        return self._compute_clearing_prices_from(self._workers)
 
     def _known_stage_types(self) -> set[str]:
         """Return the set of stage types from registered pipeline templates.
@@ -470,11 +482,25 @@ class NeuralBroker:
             }
         return stage_types
 
-    def _dispatch_placement(self, dag) -> dict[str, str] | None:
-        """Route placement to the correct algorithm based on config.placement_mode.
+    def _dispatch_placement_on(
+        self,
+        dag,
+        topology: NetworkTopology,
+        governance: GovernancePolicy,
+        workers: dict[str, WorkerInfo],
+    ) -> dict[str, str] | None:
+        """Route placement to the correct algorithm using snapshot state.
+
+        All placement algorithms receive the snapshotted topology,
+        governance, and workers rather than reading self._* directly.
+        This allows the caller to release _workers_lock before calling
+        this method, eliminating lock contention on the publish hot path.
 
         Args:
             dag: The pipeline DAG to place.
+            topology: Snapshotted network topology.
+            governance: Snapshotted governance policy.
+            workers: Snapshotted worker registry (for market clearing prices).
 
         Returns:
             Placement dict {stage_id: node_id} or None if rejected (market mode).
@@ -485,37 +511,47 @@ class NeuralBroker:
         mode = self.config.placement_mode
 
         if mode == "market":
-            prices = self._compute_clearing_prices()
+            prices = self._compute_clearing_prices_from(workers)
             return market_mode_placement(
                 dag,
-                self._topology,
-                self._governance,
+                topology,
+                governance,
                 prices,
                 self.config.wan_cost_ms,
                 self.config.domain_id,
             )
         elif mode == "locality":
             return locality_placement(
-                dag, self._topology, self._governance, self.config.domain_id,
+                dag, topology, governance, self.config.domain_id,
             )
         elif mode == "latency":
             return latency_greedy_placement(
-                dag, self._topology, self._governance,
+                dag, topology, governance,
             )
         elif mode == "spillover":
             return spillover_placement(
-                dag, self._topology, self._governance, self.config.domain_id,
+                dag, topology, governance, self.config.domain_id,
             )
         else:
-            # Default: neural (or any unrecognized mode falls back to neural)
             return find_placement(
                 dag=dag,
-                topology=self._topology,
-                governance=self._governance,
+                topology=topology,
+                governance=governance,
                 alpha=self.config.alpha,
                 beta=self.config.beta,
                 gamma=self.config.gamma,
             )
+
+    def _dispatch_placement(self, dag) -> dict[str, str] | None:
+        """Route placement using live state (convenience wrapper).
+
+        Delegates to _dispatch_placement_on with self._topology,
+        self._governance, and self._workers. Used by failure-recovery
+        paths that already hold _workers_lock.
+        """
+        return self._dispatch_placement_on(
+            dag, self._topology, self._governance, dict(self._workers),
+        )
 
     # ------------------------------------------------------------------
     # Health monitoring
@@ -1122,17 +1158,31 @@ class NeuralBroker:
                     stage.data_sovereignty_domain = self.config.domain_id
 
             # Step 2: Compute placement (local first, then federation)
+            #
+            # Snapshot-and-release: hold _workers_lock only long enough to
+            # capture the topology, governance, and workers state. Release
+            # the lock before computing placement, which may take O(|V|*|N|^2)
+            # for the DP solver.  This eliminates lock contention at high
+            # arrival rates where concurrent publishes would otherwise
+            # serialize on the lock.
             placement = None
             local_error = None
 
             async with self._workers_lock:
-                if self._topology.nodes:
-                    try:
-                        placement = self._dispatch_placement(dag)
-                    except RuntimeError as exc:
-                        local_error = str(exc)
-                else:
-                    local_error = "No workers registered; cannot compute placement."
+                topo_snapshot = self._topology
+                gov_snapshot = self._governance
+                workers_snapshot = dict(self._workers)
+                has_nodes = bool(topo_snapshot.nodes)
+
+            if has_nodes:
+                try:
+                    placement = self._dispatch_placement_on(
+                        dag, topo_snapshot, gov_snapshot, workers_snapshot,
+                    )
+                except RuntimeError as exc:
+                    local_error = str(exc)
+            else:
+                local_error = "No workers registered; cannot compute placement."
 
             # Step 2b: If local placement failed, try federation forwarding
             # Only forward if this is not already a forwarded request (prevent loops)
@@ -1191,12 +1241,13 @@ class NeuralBroker:
             )
 
             # Step 4a: Post-placement governance feasibility check
+            # Use the same topology/governance snapshots from Step 2
+            # (consistent with the state used for placement).
             from src.broker.placement import check_feasibility
 
-            async with self._workers_lock:
-                is_feasible, violations = check_feasibility(
-                    placement, dag, self._topology, self._governance
-                )
+            is_feasible, violations = check_feasibility(
+                placement, dag, topo_snapshot, gov_snapshot
+            )
             if not is_feasible:
                 for v in violations:
                     self._metrics.record_governance_violation(

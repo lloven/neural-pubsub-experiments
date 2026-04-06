@@ -278,18 +278,23 @@ class Worker:
     def registration_payload(self) -> dict:
         """Build the registration payload for the broker.
 
-        Includes callback URL (explicit or auto-generated from port)
-        and bid_cost_ms for market-mode allocation.
+        Includes callback URL and bid_cost_ms for market-mode allocation.
+        When ``callback_url`` is set (host networking / multi-VM), it is
+        sent explicitly.  When empty (Docker Compose with isolated
+        networks), the ``url`` field is omitted so the broker falls back
+        to the HTTP request's client IP, which is the container's
+        Docker-internal address reachable from other containers.
         """
-        url = self.config.callback_url or self.local_url
-        return {
+        payload = {
             "node_id": self.config.node_id,
             "domain_id": self.config.domain_id,
             "slice_id": self.config.slice_id,
             "capacity": self.config.capacity,
-            "url": url,
             "bid_cost_ms": self.config.bid_cost_ms,
         }
+        if self.config.callback_url:
+            payload["url"] = self.config.callback_url
+        return payload
 
     # ------------------------------------------------------------------
     # FastAPI application

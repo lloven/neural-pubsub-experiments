@@ -126,8 +126,14 @@ class TestRegistrationPayload:
         assert payload["url"] == "http://10.0.0.1:8095"
         assert payload["bid_cost_ms"] == 200.0
 
-    def test_payload_fallback_url_from_port(self):
-        """When no explicit URL, payload uses localhost + port."""
+    def test_payload_omits_url_when_no_callback(self):
+        """When no explicit callback_url, payload omits url field.
+
+        This lets the broker use request.client.host (the Docker-internal
+        IP), which is reachable from other containers on the same Docker
+        network.  Sending 'http://localhost:PORT' would break Docker
+        Compose with isolated networks.
+        """
         config = WorkerConfig(
             node_id="w1", domain_id="d1", slice_id="URLLC",
             capacity=1.0, broker_url="http://localhost:8080",
@@ -135,4 +141,4 @@ class TestRegistrationPayload:
         )
         worker = Worker(config)
         payload = worker.registration_payload()
-        assert payload["url"] == "http://localhost:8095"
+        assert "url" not in payload
