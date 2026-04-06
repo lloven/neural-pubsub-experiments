@@ -242,8 +242,13 @@ def expected_run_count(
         )
         return n_configs * n_strategies * n_seeds
 
-    if canonical in ("contention", "federation", "stress", "market"):
+    if canonical in ("contention", "federation", "stress"):
         return n_configs * n_seeds
+
+    if canonical in ("market", "governance"):
+        n_pipelines = len(exp.get("pipelines", ["default"]))
+        n_loads = len(exp.get("loads", ["medium"]))
+        return n_configs * n_pipelines * n_loads * n_seeds
 
     # baseline: not a simple product; caller should use build_run_matrix
     raise ValueError(

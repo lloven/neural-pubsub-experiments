@@ -39,6 +39,9 @@ from src.pipeline.dag import PipelineDAG
 from src.pipeline.patterns import (
     anomaly_detection_pipeline,
     cqi_prediction_pipeline,
+    cqi_prediction_chain_8stage,
+    ran_anomaly_detection_8stage,
+    ran_intelligence_suite_8stage,
     sensor_fusion_pipeline,
 )
 
@@ -144,6 +147,10 @@ class WorkloadGenerator:
         "cqi_prediction": cqi_prediction_pipeline,
         "anomaly_detection": anomaly_detection_pipeline,
         "sensor_fusion": lambda: sensor_fusion_pipeline(_DEFAULT_N_SENSORS),
+        # 8-stage O-RAN pipelines (Tier 2 market experiments)
+        "cqi_chain": cqi_prediction_chain_8stage,
+        "anomaly_sp": ran_anomaly_detection_8stage,
+        "ran_entangled": ran_intelligence_suite_8stage,
     }
 
     # Maximum number of concurrent in-flight publish calls.
@@ -554,19 +561,28 @@ _DEFAULT_PIPELINE_MIX = {
 
 
 def build_pipeline_mix_from_env() -> dict[str, float]:
-    """Build a pipeline mix from PIPELINE_MIX_* environment variables.
+    """Build a pipeline mix from environment variables.
 
-    Reads PIPELINE_MIX_CQI, PIPELINE_MIX_ANOMALY, and PIPELINE_MIX_FUSION
-    from the environment. If all three are present and sum to 1.0, uses them.
-    Otherwise falls back to the default mix (40/40/20).
-
-    This wires the env vars set by run_phase_b.py (and other phase runners)
-    to the workload generator, fixing the dead-code bug where PIPELINE_MIX_*
-    env vars were set but never consumed.
+    Priority:
+    1. PIPELINE_TYPE — if set, selects a single pipeline type at 100%.
+    2. PIPELINE_MIX_CQI/ANOMALY/FUSION — weighted 3-stage mix.
+    3. Default: 40/40/20 cqi/anomaly/sensor_fusion.
 
     Returns:
         Pipeline mix dict with keys matching template names.
+
+    Raises:
+        ValueError: If PIPELINE_TYPE names an unknown template.
     """
+    pipeline_type = os.environ.get("PIPELINE_TYPE")
+    if pipeline_type:
+        if pipeline_type not in WorkloadGenerator._TEMPLATES:
+            raise ValueError(
+                f"Unknown PIPELINE_TYPE: {pipeline_type!r}. "
+                f"Valid: {sorted(WorkloadGenerator._TEMPLATES)}"
+            )
+        return {pipeline_type: 1.0}
+
     cqi = os.environ.get("PIPELINE_MIX_CQI")
     anomaly = os.environ.get("PIPELINE_MIX_ANOMALY")
     fusion = os.environ.get("PIPELINE_MIX_FUSION")

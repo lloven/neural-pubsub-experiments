@@ -168,6 +168,18 @@ class TestDataIntegrity:
     def test_stress_run_count(self):
         assert expected_run_count("stress") == 60  # 12 x 5
 
+    def test_market_run_count(self):
+        assert expected_run_count("market") == 225  # 5 configs x 3 pipelines x 3 loads x 5 seeds
+
+    def test_governance_run_count(self):
+        assert expected_run_count("governance") == 60  # 4 configs x 3 pipelines x 1 load x 5 seeds
+
+    def test_market_has_5_configs(self):
+        assert len(get_configs("market")) == 5
+
+    def test_governance_has_4_configs(self):
+        assert len(get_configs("governance")) == 4
+
 
 # ---------------------------------------------------------------------------
 # print_summary()
