@@ -375,6 +375,35 @@ class Worker:
             self.config.broker_url,
         )
 
+    async def _register_with_retry(
+        self, max_attempts: int = 10, delay: float = 2.0,
+    ) -> None:
+        """Retry registration until success or max_attempts exhausted.
+
+        On each failure, waits *delay* seconds before retrying. If all
+        attempts fail, the worker continues running (the broker's health
+        check may trigger a later registration).
+        """
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self.register()
+                return
+            except Exception as exc:  # noqa: BLE001
+                if attempt < max_attempts:
+                    logger.warning(
+                        "Registration attempt %d/%d failed: %s. "
+                        "Retrying in %.0fs...",
+                        attempt, max_attempts, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "Registration failed after %d attempts: %s. "
+                        "Worker will run unregistered; broker health "
+                        "check may trigger later registration.",
+                        max_attempts, exc,
+                    )
+
     async def shutdown(self) -> None:
         """Deregister this worker from the broker and signal the server to stop.
 
@@ -539,12 +568,7 @@ class Worker:
         """
         self._http_client = httpx.AsyncClient()
 
-        try:
-            await self.register()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Initial registration failed (will retry later): %s", exc
-            )
+        await self._register_with_retry()
 
         uv_config = uvicorn.Config(
             app=self._app,

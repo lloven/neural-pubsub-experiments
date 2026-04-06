@@ -142,3 +142,59 @@ class TestRegistrationPayload:
         worker = Worker(config)
         payload = worker.registration_payload()
         assert "url" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Registration retry
+# ---------------------------------------------------------------------------
+
+
+class TestRegistrationRetry:
+    """Worker must retry registration if the broker is initially unreachable."""
+
+    @pytest.mark.asyncio
+    async def test_retries_on_initial_failure(self):
+        """register() is retried until success or max attempts."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        config = WorkerConfig(
+            node_id="w1", domain_id="d1", slice_id="URLLC",
+            capacity=1.0, broker_url="http://localhost:8080",
+        )
+        worker = Worker(config)
+        worker._http_client = AsyncMock()
+
+        call_count = 0
+
+        async def mock_register():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("broker not ready")
+
+        worker.register = mock_register
+
+        # _register_with_retry should retry until success
+        await worker._register_with_retry(max_attempts=5, delay=0.01)
+        assert call_count == 3  # failed twice, succeeded on 3rd
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_max_attempts(self):
+        """After max_attempts, worker logs warning but does not crash."""
+        from unittest.mock import AsyncMock
+
+        config = WorkerConfig(
+            node_id="w1", domain_id="d1", slice_id="URLLC",
+            capacity=1.0, broker_url="http://localhost:8080",
+        )
+        worker = Worker(config)
+        worker._http_client = AsyncMock()
+
+        async def always_fail():
+            raise ConnectionError("broker not ready")
+
+        worker.register = always_fail
+
+        # Should not raise even after exhausting attempts
+        await worker._register_with_retry(max_attempts=3, delay=0.01)
