@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -366,7 +367,7 @@ def start_cluster(
             f"docker compose --env-file deploy/{vm.env_file} "
             f"-f deploy/docker-compose.vm.yaml up -d"
         )
-        _ssh(vm.ssh_host, cmd, dry_run=dry_run)
+        _exec(vm, cmd, dry_run=dry_run)
 
 
 def stop_cluster(dry_run: bool = False) -> None:
@@ -377,7 +378,7 @@ def stop_cluster(dry_run: bool = False) -> None:
             f"docker compose --env-file deploy/{vm.env_file} "
             f"-f deploy/docker-compose.vm.yaml down --remove-orphans"
         )
-        _ssh(vm.ssh_host, cmd, dry_run=dry_run)
+        _exec(vm, cmd, dry_run=dry_run)
 
 
 def _governance_for_vm(vm: VMConfig, governance_config: str) -> str:
@@ -407,7 +408,7 @@ def wait_for_federation(timeout_s: int = 120, dry_run: bool = False) -> bool:
         all_ok = True
         for vm in VMS:
             try:
-                result = _ssh(vm.ssh_host, "curl -sf http://localhost:8080/health")
+                result = _exec(vm, "curl -sf http://localhost:8080/health")
                 if '"status"' not in result:
                     all_ok = False
                     break
@@ -424,16 +425,32 @@ def wait_for_federation(timeout_s: int = 120, dry_run: bool = False) -> bool:
 
 
 def collect_results(run_id: str, results_subdir: str = "market", dry_run: bool = False) -> None:
-    """Rsync results from all VMs to local results directory."""
+    """Collect results from all VMs to the local results directory.
+
+    For the local VM: copies results locally (no rsync needed).
+    For remote VMs: rsyncs over SSH.
+    """
     results_dir = RESULTS_BASE / results_subdir
     results_dir.mkdir(parents=True, exist_ok=True)
     for vm in VMS:
-        _rsync(
-            vm.ssh_host,
-            f"{REMOTE_PROJECT_DIR}/results/",
-            str(results_dir / run_id / vm.name) + "/",
-            dry_run=dry_run,
-        )
+        dst = str(results_dir / run_id / vm.name) + "/"
+        if is_local_vm(vm):
+            src = str(DEPLOY_DIR.parent / "results") + "/"
+            if dry_run:
+                logger.info("[DRY RUN] local copy %s -> %s", src, dst)
+            else:
+                logger.info("[LOCAL] copy results %s -> %s", src, dst)
+                os.makedirs(dst, exist_ok=True)
+                subprocess.run(
+                    ["cp", "-r", src, dst], check=False,
+                )
+        else:
+            _rsync(
+                vm.ssh_host,
+                f"{REMOTE_PROJECT_DIR}/results/",
+                dst,
+                dry_run=dry_run,
+            )
 
 
 def run_single(
@@ -504,7 +521,7 @@ def run_single(
         f"--duration {warmup_s + measurement_s} "
         f"--result-file /results/{run_id}.csv"
     )
-    _ssh(VMS[0].ssh_host, workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
+    _exec(VMS[0], workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
 
     # 6. Collect results
     collect_results(run_id, results_subdir=results_subdir, dry_run=dry_run)
