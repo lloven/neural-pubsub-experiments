@@ -62,33 +62,124 @@ DEPLOY_DIR = Path(__file__).parent.parent / "deploy"
 RESULTS_BASE = Path(__file__).parent.parent / "results"
 REMOTE_PROJECT_DIR = "~/neural-pubsub"
 
+# Module-level override for local VM detection.
+# Set via --local-vm CLI flag or auto-detected from hostname.
+_LOCAL_VM_OVERRIDE: str | None = None
+
+# ---------------------------------------------------------------------------
+# Local VM detection
+# ---------------------------------------------------------------------------
+
+import socket
+
+
+def is_local_vm(
+    vm: VMConfig, local_vm_override: str | None = None,
+) -> bool:
+    """Check if *vm* is the local machine (no SSH needed).
+
+    When the orchestrator runs on VM1, operations for VM1 can be
+    executed locally (subprocess) instead of via SSH, making them
+    immune to SSH connection drops.
+
+    Detection priority:
+    1. Explicit override (--local-vm CLI or module-level _LOCAL_VM_OVERRIDE).
+    2. Hostname match against vm.name or vm.ssh_host.
+    """
+    override = local_vm_override or _LOCAL_VM_OVERRIDE
+    if override:
+        return vm.name == override or vm.ssh_host == override
+    hostname = socket.gethostname()
+    return hostname == vm.name or hostname == vm.ssh_host
+
+
+def _local_run(
+    cmd: str,
+    dry_run: bool = False,
+    timeout: int = 60,
+    check: bool = False,
+) -> str:
+    """Execute a command locally (for VM1 operations).
+
+    Same interface as _ssh but runs via subprocess.run(shell=True).
+    """
+    if dry_run:
+        logger.info("[DRY RUN] LOCAL: %s", cmd)
+        return ""
+    logger.info("[LOCAL] %s", cmd)
+    result = subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        logger.error("Local command failed (rc=%d): %s", result.returncode, result.stderr)
+        if check:
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, result.stdout, result.stderr,
+            )
+    return result.stdout
+
+
+def _exec(
+    vm: VMConfig,
+    cmd: str,
+    dry_run: bool = False,
+    timeout: int = 60,
+    check: bool = False,
+    local_vm_override: str | None = None,
+) -> str:
+    """Execute a command on *vm*, locally or via SSH.
+
+    Routes to _local_run when the VM is the local machine, _ssh with
+    retry otherwise.
+    """
+    if is_local_vm(vm, local_vm_override):
+        return _local_run(cmd, dry_run=dry_run, timeout=timeout, check=check)
+    return _ssh(vm.ssh_host, cmd, dry_run=dry_run, timeout=timeout, check=check,
+                retries=2)
+
+
 # ---------------------------------------------------------------------------
 # WAN emulation
 # ---------------------------------------------------------------------------
 
 WAN_DELAY_MS = 50
 WAN_JITTER_MS = 5
+WAN_INTERFACE = "enp1s0"  # Primary interface on 5GTNF VMs (not eth0)
 
 def setup_wan_emulation(vm2: VMConfig, vm3: VMConfig, dry_run: bool = False) -> None:
     """Add tc qdisc netem delay on VM2's interface for traffic to VM3 (and vice versa).
 
-    This emulates the edge-cloud WAN link (~50ms RTT).
+    This emulates the edge-cloud WAN link (~50ms RTT).  Requires
+    passwordless sudo for /sbin/tc on both VMs.  If sudo fails, logs
+    a clear hint and continues (best-effort; experiments run without
+    WAN shaping rather than crashing).
     """
     for src, dst in [(vm2, vm3), (vm3, vm2)]:
         cmds = [
-            f"sudo tc qdisc del dev eth0 root 2>/dev/null || true",
-            f"sudo tc qdisc add dev eth0 root handle 1: prio",
-            f"sudo tc qdisc add dev eth0 parent 1:3 handle 30: netem delay {WAN_DELAY_MS}ms {WAN_JITTER_MS}ms",
-            f"sudo tc filter add dev eth0 parent 1:0 protocol ip u32 match ip dst {dst.ip}/32 flowid 1:3",
+            f"sudo tc qdisc del dev {WAN_INTERFACE} root 2>/dev/null || true",
+            f"sudo tc qdisc add dev {WAN_INTERFACE} root handle 1: prio",
+            f"sudo tc qdisc add dev {WAN_INTERFACE} parent 1:3 handle 30: netem delay {WAN_DELAY_MS}ms {WAN_JITTER_MS}ms",
+            f"sudo tc filter add dev {WAN_INTERFACE} parent 1:0 protocol ip u32 match ip dst {dst.ip}/32 flowid 1:3",
         ]
-        for cmd in cmds:
-            _ssh(src.ssh_host, cmd, dry_run=dry_run)
+        try:
+            for cmd in cmds:
+                _ssh(src.ssh_host, cmd, dry_run=dry_run)
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "tc setup failed on %s: %s. WAN emulation will not be active. "
+                "To fix, run on each VM: "
+                "echo 'lloven ALL=(ALL) NOPASSWD: /sbin/tc' | "
+                "sudo tee /etc/sudoers.d/tc-netem && sudo chmod 440 /etc/sudoers.d/tc-netem",
+                src.name,
+                exc.stderr or exc,
+            )
+            return
 
 
 def teardown_wan_emulation(vm2: VMConfig, vm3: VMConfig, dry_run: bool = False) -> None:
     """Remove tc qdisc rules."""
     for vm in [vm2, vm3]:
-        _ssh(vm.ssh_host, "sudo tc qdisc del dev eth0 root 2>/dev/null || true", dry_run=dry_run)
+        _ssh(vm.ssh_host, f"sudo tc qdisc del dev {WAN_INTERFACE} root 2>/dev/null || true", dry_run=dry_run)
 
 # ---------------------------------------------------------------------------
 # Failure injection (SSH-based, no sudo needed)
@@ -132,25 +223,43 @@ def inject_remote_partition(
 # ---------------------------------------------------------------------------
 
 def _ssh(host: str, cmd: str, dry_run: bool = False, timeout: int = 60,
-         check: bool = False) -> str:
+         check: bool = False, retries: int = 0, retry_delay: float = 2.0) -> str:
     """Execute a command on a remote host via SSH.
 
     Args:
         check: If True, raise subprocess.CalledProcessError on non-zero exit.
-               Use for critical operations (start_cluster, workload).
+        retries: Number of retries on *connection* failures (TimeoutExpired,
+            OSError). Command-level failures (non-zero exit) are NOT retried.
+        retry_delay: Initial delay between retries (doubles each attempt).
     """
-    full_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", host, cmd]
+    full_cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=10", host, cmd]
     if dry_run:
         logger.info("[DRY RUN] %s: %s", host, cmd)
         return ""
-    logger.info("[SSH] %s: %s", host, cmd)
-    result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
-    if result.returncode != 0:
-        logger.error("SSH failed on %s: %s", host, result.stderr)
-        if check:
-            raise subprocess.CalledProcessError(result.returncode, full_cmd,
-                                                 result.stdout, result.stderr)
-    return result.stdout
+    for attempt in range(retries + 1):
+        try:
+            logger.info("[SSH] %s: %s", host, cmd)
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode != 0:
+                logger.error("SSH failed on %s: %s", host, result.stderr)
+                if check:
+                    raise subprocess.CalledProcessError(
+                        result.returncode, full_cmd, result.stdout, result.stderr,
+                    )
+            return result.stdout
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            if attempt < retries:
+                delay = retry_delay * (2 ** attempt)
+                logger.warning(
+                    "SSH to %s failed (attempt %d/%d), retrying in %.0fs: %s",
+                    host, attempt + 1, retries + 1, delay, exc,
+                )
+                time.sleep(delay)
+            else:
+                raise
 
 
 def _rsync(src_host: str, src_path: str, dst_path: str, dry_run: bool = False) -> None:
