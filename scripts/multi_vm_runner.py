@@ -302,7 +302,10 @@ def deploy_code(dry_run: bool = False) -> None:
         exclude_flags = []
         for pattern in _RSYNC_EXCLUDES:
             exclude_flags.extend(["--exclude", pattern])
-        full_cmd = ["rsync", "-az", "--delete"] + exclude_flags + [src, dst]
+        full_cmd = [
+            "rsync", "-az", "--delete",
+            "-e", "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10",
+        ] + exclude_flags + [src, dst]
         if dry_run:
             logger.info("[DRY RUN] rsync code to %s", vm.name)
             continue
