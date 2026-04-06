@@ -295,7 +295,10 @@ def deploy_code(dry_run: bool = False) -> None:
         if is_local_vm(vm):
             logger.info("Skipping code deploy to %s (local VM).", vm.name)
             continue
-        dst = f"{vm.ssh_host}:{REMOTE_PROJECT_DIR}/"
+        # Use user@IP for rsync (not SSH alias) — the orchestrator VM
+        # may not have ~/.ssh/config with alias definitions.
+        user = vm.ssh_host.split("@")[0] if "@" in vm.ssh_host else "lloven"
+        dst = f"{user}@{vm.ip}:{REMOTE_PROJECT_DIR}/"
         exclude_flags = []
         for pattern in _RSYNC_EXCLUDES:
             exclude_flags.extend(["--exclude", pattern])

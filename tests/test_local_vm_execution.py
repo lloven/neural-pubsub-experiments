@@ -153,30 +153,50 @@ class TestSshRetry:
 class TestDeployCode:
     """deploy_code must rsync codebase to remote VMs, skip local."""
 
-    @patch("scripts.multi_vm_runner._ssh")
     @patch("subprocess.run")
     @patch("socket.gethostname", return_value=VMS[0].name)
-    def test_rsyncs_to_remote_vms_only(self, _hostname, mock_run, mock_ssh):
+    def test_rsyncs_to_remote_vms_only(self, _hostname, mock_run):
         from scripts.multi_vm_runner import deploy_code
         mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
         deploy_code(dry_run=False)
-        # Should rsync to VMs 2-4 (3 calls), skip VM1 (local)
         rsync_calls = [
             c for c in mock_run.call_args_list
             if "rsync" in str(c)
         ]
-        assert len(rsync_calls) == 3
-        # Verify targets are the remote VMs
-        all_args = " ".join(str(c) for c in rsync_calls)
-        assert VMS[1].ssh_host in all_args
-        assert VMS[2].ssh_host in all_args
-        assert VMS[3].ssh_host in all_args
-        assert VMS[0].ssh_host not in all_args
+        assert len(rsync_calls) == 3  # VMs 2-4, not VM1
 
-    @patch("scripts.multi_vm_runner._ssh")
     @patch("subprocess.run")
     @patch("socket.gethostname", return_value=VMS[0].name)
-    def test_excludes_git_and_results(self, _hostname, mock_run, mock_ssh):
+    def test_uses_ip_not_ssh_alias(self, _hostname, mock_run):
+        """Rsync targets must use user@IP, not SSH aliases.
+
+        SSH aliases (5gtn50, etc.) exist only in the laptop's
+        ~/.ssh/config.  When running from VM1, the other VMs are
+        reachable by IP on the same LAN.
+        """
+        from scripts.multi_vm_runner import deploy_code
+        mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
+        deploy_code(dry_run=False)
+        rsync_calls = [
+            c for c in mock_run.call_args_list
+            if "rsync" in str(c)
+        ]
+        for c in rsync_calls:
+            # The rsync destination should contain an IP address
+            cmd_list = c.args[0] if c.args else c.kwargs.get("args", [])
+            dst_arg = [a for a in cmd_list if ":" in a and "rsync" not in a]
+            assert dst_arg, f"No destination found in rsync call: {cmd_list}"
+            dst = dst_arg[0]
+            # Must contain an IP, not an unresolvable SSH alias
+            import re
+            assert re.search(r"\d+\.\d+\.\d+\.\d+", dst) or "localhost" in dst, (
+                f"Rsync destination '{dst}' uses SSH alias instead of IP. "
+                f"VM1 has no ~/.ssh/config with alias definitions."
+            )
+
+    @patch("subprocess.run")
+    @patch("socket.gethostname", return_value=VMS[0].name)
+    def test_excludes_git_and_results(self, _hostname, mock_run):
         from scripts.multi_vm_runner import deploy_code
         mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
         deploy_code(dry_run=False)
@@ -194,7 +214,6 @@ class TestDeployCode:
     def test_dry_run_no_subprocess(self, _hostname, mock_run):
         from scripts.multi_vm_runner import deploy_code
         deploy_code(dry_run=True)
-        # No actual rsync calls in dry-run
         rsync_calls = [
             c for c in mock_run.call_args_list
             if "rsync" in str(c)
@@ -213,4 +232,4 @@ class TestDeployCode:
         ]
         for c in rsync_calls:
             args_str = str(c)
-            assert REMOTE_PROJECT_DIR.lstrip("~") in args_str or "neural-pubsub" in args_str
+            assert "neural-pubsub" in args_str
