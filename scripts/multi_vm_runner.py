@@ -435,15 +435,13 @@ def collect_results(run_id: str, results_subdir: str = "market", dry_run: bool =
     for vm in VMS:
         dst = str(results_dir / run_id / vm.name) + "/"
         if is_local_vm(vm):
-            src = str(DEPLOY_DIR.parent / "results") + "/"
+            # Local VM: the result CSV is already on disk at
+            # results/{results_subdir}/{run_id}.csv. No copy needed
+            # since collect_results destination is under the same tree.
             if dry_run:
-                logger.info("[DRY RUN] local copy %s -> %s", src, dst)
+                logger.info("[DRY RUN] local results already on disk for %s", vm.name)
             else:
-                logger.info("[LOCAL] copy results %s -> %s", src, dst)
-                os.makedirs(dst, exist_ok=True)
-                subprocess.run(
-                    ["cp", "-r", src, dst], check=False,
-                )
+                logger.info("Local results for %s already at results/%s/", vm.name, results_subdir)
         else:
             _rsync(
                 vm.ssh_host,
@@ -512,14 +510,14 @@ def run_single(
         f"docker run --rm --network=host "
         f"--entrypoint python3 "
         f"{env_flags}"
-        f"-v $PWD/results/{results_subdir}:/results "
+        f"-v $PWD/results:/results "
         f"neural-pubsub:latest "
         f"-m src.workload.generator "
         f"--broker-url http://localhost:8080 "
         f"--seed {seed} "
         f"--warmup {warmup_s} "
         f"--duration {warmup_s + measurement_s} "
-        f"--result-file /results/{run_id}.csv"
+        f"--result-file /results/{results_subdir}/{run_id}.csv"
     )
     _exec(VMS[0], workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
 
