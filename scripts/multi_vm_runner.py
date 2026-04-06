@@ -278,6 +278,38 @@ def _rsync(src_host: str, src_path: str, dst_path: str, dry_run: bool = False) -
 # Deployment
 # ---------------------------------------------------------------------------
 
+_RSYNC_EXCLUDES = [
+    ".git", "results", "__pycache__", ".pytest_cache",
+    "*.pyc", ".mypy_cache", "logs", ".env.local",
+]
+
+
+def deploy_code(dry_run: bool = False) -> None:
+    """Rsync the codebase from the local VM to all remote VMs.
+
+    Skips the local VM (detected via is_local_vm).  Excludes .git,
+    results, and caches to keep the transfer fast.
+    """
+    src = str(DEPLOY_DIR.parent) + "/"  # trailing slash = contents only
+    for vm in VMS:
+        if is_local_vm(vm):
+            logger.info("Skipping code deploy to %s (local VM).", vm.name)
+            continue
+        dst = f"{vm.ssh_host}:{REMOTE_PROJECT_DIR}/"
+        exclude_flags = []
+        for pattern in _RSYNC_EXCLUDES:
+            exclude_flags.extend(["--exclude", pattern])
+        full_cmd = ["rsync", "-az", "--delete"] + exclude_flags + [src, dst]
+        if dry_run:
+            logger.info("[DRY RUN] rsync code to %s", vm.name)
+            continue
+        logger.info("[RSYNC] code -> %s (%s)", vm.name, dst)
+        result = subprocess.run(full_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error("Code deploy to %s failed: %s", vm.name, result.stderr)
+            raise subprocess.CalledProcessError(result.returncode, full_cmd)
+
+
 def deploy_image(dry_run: bool = False) -> None:
     """Build and push the Docker image to all VMs."""
     logger.info("Building Docker image...")
