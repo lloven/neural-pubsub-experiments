@@ -120,6 +120,11 @@ class BrokerConfig:
     # Transport (dual-transport factorial experiment)
     transport: str = "http"  # "http" or "kafka"
     kafka_bootstrap: str | None = None
+    # Market mode load-aware worker selection (ablation only).
+    # When True, market_mode_placement picks the least-loaded feasible
+    # worker within a domain. Default False preserves the main campaign's
+    # market behaviour for reproducibility.
+    market_load_aware: bool = False
 
 
 def load_config(path: str) -> BrokerConfig:
@@ -519,6 +524,7 @@ class NeuralBroker:
                 prices,
                 self.config.wan_cost_ms,
                 self.config.domain_id,
+                load_aware=self.config.market_load_aware,
             )
         elif mode == "locality":
             return locality_placement(
@@ -911,6 +917,11 @@ class NeuralBroker:
             },
         }
 
+        # Reserve load at dispatch time (not placement time).
+        # Released in stage_result handler via _update_worker_load(-demand).
+        async with self._workers_lock:
+            self._update_worker_load(node_id, stage.computational_demand)
+
         try:
             await self._send_to_worker(
                 worker.url, payload,
@@ -935,13 +946,15 @@ class NeuralBroker:
                 node_id,
                 exc,
             )
-            # Evict the unreachable worker so that the re-placement solver
-            # does not assign the stage back to the same (dead) node.
+            # Do NOT evict the worker on a single dispatch failure.
+            # Transient errors (network blips, connection pool contention,
+            # slow responses) should not permanently remove workers.
+            # The health check loop (with consecutive-failure threshold)
+            # handles actual worker death.  Instead, increment the failure
+            # counter so the health check is aware of the issue.
             async with self._workers_lock:
-                if node_id in self._workers:
-                    del self._workers[node_id]
-                    self._rebuild_topology()
-                    self._worker_failures.pop(node_id, None)
+                count = self._worker_failures.get(node_id, 0) + 1
+                self._worker_failures[node_id] = count
 
             self._adaptation_tracker.record_failure(
                 "dispatch_fail", node_id, time.time()
@@ -998,8 +1011,11 @@ class NeuralBroker:
                             exc2,
                         )
 
-            # All recovery attempts exhausted: mark pipeline as permanently
-            # failed and remove it from the active set.
+            # Release load for this dispatched stage (reserved at dispatch time).
+            async with self._workers_lock:
+                self._update_worker_load(node_id, -stage.computational_demand)
+
+            # Mark pipeline as permanently failed.
             async with self._pipelines_lock:
                 pipeline_state.failed = True
                 pipeline_state.error = (
@@ -1054,6 +1070,11 @@ class NeuralBroker:
         if not ready:
             return
 
+        # Track dispatched stages BEFORE dispatch (prevents re-dispatch
+        # if a result callback arrives while dispatch is in-flight).
+        async with self._pipelines_lock:
+            pipeline_state.dispatched_stages.update(ready)
+
         tasks = [
             self._dispatch_stage(pipeline_state, sid, self._http_client)
             for sid in ready
@@ -1088,7 +1109,16 @@ class NeuralBroker:
 
         @app.on_event("startup")
         async def _startup() -> None:
-            self._http_client = httpx.AsyncClient()
+            # Connection pool sized for large worker pools (e.g., 48 workers
+            # in oracle mode).  Default limits (20 keepalive) cause connection
+            # pool exhaustion when concurrent stage dispatches and health
+            # checks compete for connections.
+            self._http_client = httpx.AsyncClient(
+                limits=httpx.Limits(
+                    max_connections=200,
+                    max_keepalive_connections=100,
+                ),
+            )
             if self.config.transport == "kafka" and self.config.kafka_bootstrap:
                 import json as _json
                 from aiokafka import AIOKafkaProducer
@@ -1183,6 +1213,13 @@ class NeuralBroker:
                     local_error = str(exc)
             else:
                 local_error = "No workers registered; cannot compute placement."
+
+            # Note: load reservation is done per-stage at dispatch time
+            # (in _dispatch_stage), not per-pipeline at placement time.
+            # Reserving all stages upfront exhausts capacity after ~25
+            # concurrent pipelines (48 capacity / 1.9 demand per pipeline).
+            # Per-stage reservation only blocks capacity for stages
+            # actually being executed, allowing higher concurrency.
 
             # Step 2b: If local placement failed, try federation forwarding
             # Only forward if this is not already a forwarded request (prevent loops)
@@ -1738,6 +1775,13 @@ def _parse_args() -> argparse.Namespace:
         help="WAN cost in ms for market-mode cross-domain pricing (default 0.0).",
     )
     parser.add_argument(
+        "--market-load-aware",
+        action="store_true",
+        dest="market_load_aware",
+        default=os.environ.get("MARKET_LOAD_AWARE", "false").lower() == "true",
+        help="Enable load-aware worker selection in market mode (ablation only).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -1773,6 +1817,7 @@ def _make_config_from_args(args: argparse.Namespace) -> BrokerConfig:
     cfg.governance_enabled = args.governance_enabled
     cfg.placement_mode = args.placement_mode
     cfg.wan_cost_ms = args.wan_cost_ms
+    cfg.market_load_aware = args.market_load_aware
     cfg.transport = args.transport
     cfg.kafka_bootstrap = args.kafka_bootstrap if args.transport == "kafka" else None
 
