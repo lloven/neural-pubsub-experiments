@@ -139,11 +139,12 @@ def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
     run_id = run.run_id
     strat_env = _strategy_env(run.strategy)
 
+    # Failure target: eMBB worker on VM2 (d2, CU/near-RT-RIC)
     failure_fn = None
     if run.failure_target is not None:
-        failure_fn = _partial(
+        failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
-            vm=multi_vm_runner.VMS[0],
+            vm=multi_vm_runner.VMS[1],  # VM2: eMBB workers
             container="deploy-worker-0-1",
             delay_s=run.failure_delay_s,
         )
@@ -156,12 +157,15 @@ def _run_distributed(run: StressRunConfig, dry_run: bool) -> dict:
         governance_config="all",
         broker_module=strat_env.get("BROKER_MODULE"),
         placement=strat_env.get("PLACEMENT"),
-        workload_env={"ARRIVAL_RATE": str(run.arrival_rate)},
+        workload_env={
+            "PIPELINE_TYPE": "cqi_chain",
+            "ARRIVAL_RATE": str(run.arrival_rate),
+        },
         results_subdir="stress",
         warmup_s=run.warmup_s,
         measurement_s=run.measurement_s,
         failure_fn=failure_fn,
-        wan_emulation=False,
+        wan_emulation=True,
         dry_run=dry_run,
     )
     return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",

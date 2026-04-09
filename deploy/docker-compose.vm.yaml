@@ -47,7 +47,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-0
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8081
       - --callback-url=http://${VM_IP:-localhost}:8081
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -61,7 +61,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-1
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8082
       - --callback-url=http://${VM_IP:-localhost}:8082
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -75,7 +75,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-2
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8083
       - --callback-url=http://${VM_IP:-localhost}:8083
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -89,7 +89,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-3
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8084
       - --callback-url=http://${VM_IP:-localhost}:8084
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -103,7 +103,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-4
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8085
       - --callback-url=http://${VM_IP:-localhost}:8085
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -117,7 +117,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-5
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8086
       - --callback-url=http://${VM_IP:-localhost}:8086
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -131,7 +131,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-6
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8087
       - --callback-url=http://${VM_IP:-localhost}:8087
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -145,7 +145,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-7
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8088
       - --callback-url=http://${VM_IP:-localhost}:8088
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -159,7 +159,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-8
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8089
       - --callback-url=http://${VM_IP:-localhost}:8089
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -173,7 +173,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-9
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8090
       - --callback-url=http://${VM_IP:-localhost}:8090
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -187,7 +187,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-10
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8091
       - --callback-url=http://${VM_IP:-localhost}:8091
       - --bid-cost=${WORKER_BID_COST_MS:-100}
@@ -201,7 +201,7 @@ services:
       - --node-id=${BROKER_DOMAIN}-worker-11
       - --domain=${BROKER_DOMAIN}
       - --slice=${WORKER_SLICE}
-      - --broker-url=http://localhost:${BROKER_PORT:-8080}
+      - --broker-url=${WORKER_BROKER_URL:-http://localhost:8080}
       - --port=8092
       - --callback-url=http://${VM_IP:-localhost}:8092
       - --bid-cost=${WORKER_BID_COST_MS:-100}
