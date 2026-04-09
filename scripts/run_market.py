@@ -3,9 +3,9 @@
 
 Tier 2 experiments on 4-domain O-RAN topology (4 VMs, 48 workers).
 
-Allocation (225 runs): 5 strategies x 3 pipeline types x 3 loads x 5 seeds.
+Allocation (270 runs): 6 strategies x 3 pipeline types x 3 loads x 5 seeds.
 Governance  (60 runs):  4 scenarios x 3 pipeline types x 1 load  x 5 seeds.
-Total: 285 runs (~66h on 4 VMs).
+Total: 330 runs (~73h on 4 VMs).
 
 Usage:
     python -m scripts.run_market --dry-run
@@ -64,7 +64,8 @@ MARKET_CONFIGS: dict[str, dict] = {
     "oracle-global": {
         "placement_mode": "neural",
         "governance_config": "all",
-        "description": "Oracle: single broker, full global visibility (upper bound)",
+        "oracle_mode": True,
+        "description": "Oracle: single broker on VM1, all 48 workers (upper bound)",
     },
     "market-quad": {
         "placement_mode": "market",
@@ -85,6 +86,14 @@ MARKET_CONFIGS: dict[str, dict] = {
         "placement_mode": "spillover",
         "governance_config": "all",
         "description": "Heuristic: local-first, overflow to other site",
+    },
+    "rr-global": {
+        "placement_mode": "neural",
+        "governance_config": "all",
+        "oracle_mode": True,
+        "broker_module": "src.broker.static_broker",
+        "placement": "round_robin",
+        "description": "Conventional centralized: single broker, round-robin, 48 workers",
     },
 }
 
@@ -207,6 +216,8 @@ def _run_distributed(run: MarketRunConfig, dry_run: bool) -> dict:
         seed=run.seed,
         placement_mode=cfg["placement_mode"],
         governance_config=cfg["governance_config"],
+        broker_module=cfg.get("broker_module"),
+        placement=cfg.get("placement"),
         workload_env={
             "PIPELINE_TYPE": run.pipeline_type,
             "ARRIVAL_RATE": str(run.arrival_rate),
@@ -215,6 +226,7 @@ def _run_distributed(run: MarketRunConfig, dry_run: bool) -> dict:
         warmup_s=run.warmup_s,
         measurement_s=run.measurement_s,
         wan_emulation=True,
+        oracle_mode=cfg.get("oracle_mode", False),
         dry_run=dry_run,
     )
     return {

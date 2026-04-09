@@ -73,18 +73,18 @@ class TestMarketRunConfig:
 class TestBuildRunMatrix:
     """Matrix construction: configs x pipelines x loads x seeds."""
 
-    def test_allocation_configs_produce_225(self):
+    def test_allocation_configs_produce_270(self):
         runs = build_run_matrix(list(MARKET_CONFIGS), DEFAULT_SEEDS)
-        assert len(runs) == 225  # 5 x 3 x 3 x 5
+        assert len(runs) == 270  # 6 x 3 x 3 x 5
 
     def test_governance_configs_produce_60(self):
         runs = build_run_matrix(list(GOV_CONFIGS), DEFAULT_SEEDS)
         assert len(runs) == 60  # 4 x 3 x 1 x 5
 
-    def test_all_configs_produce_285(self):
+    def test_all_configs_produce_330(self):
         all_cfgs = list(MARKET_CONFIGS) + list(GOV_CONFIGS)
         runs = build_run_matrix(all_cfgs, DEFAULT_SEEDS)
-        assert len(runs) == 285
+        assert len(runs) == 330
 
     def test_single_config_single_seed(self):
         runs = build_run_matrix(["market-quad"], [99])

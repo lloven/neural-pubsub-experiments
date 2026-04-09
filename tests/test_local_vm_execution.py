@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock, call
 
 import pytest
 
-from scripts.multi_vm_runner import VMS, REMOTE_PROJECT_DIR
+from scripts.multi_vm_runner import VMS, REMOTE_PROJECT_DIR, is_local_vm
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,8 @@ class TestFunctionsUseExec:
     def test_stop_cluster_uses_exec(self, mock_exec):
         from scripts.multi_vm_runner import stop_cluster
         stop_cluster(dry_run=True)
-        assert mock_exec.call_count == len(VMS)
+        # 1 workload container kill + len(VMS) compose down calls
+        assert mock_exec.call_count == len(VMS) + 1
 
     @patch("scripts.multi_vm_runner._exec")
     def test_wait_for_federation_uses_exec(self, mock_exec):
@@ -213,32 +214,30 @@ class TestDeployCode:
 
     @patch("subprocess.run")
     @patch("socket.gethostname", return_value=VMS[0].name)
-    def test_uses_ip_not_ssh_alias(self, _hostname, mock_run):
-        """Rsync targets must use user@IP, not SSH aliases.
+    def test_uses_ssh_host_from_config(self, _hostname, mock_run):
+        """Rsync targets must use vm.ssh_host (respects per-VM config).
 
-        SSH aliases (5gtn50, etc.) exist only in the laptop's
-        ~/.ssh/config.  When running from VM1, the other VMs are
-        reachable by IP on the same LAN.
+        From the laptop, ssh_host may be a pomerium alias (5gtn50).
+        From VM1, ssh_host is lloven@IP (direct LAN access).
+        deploy_code must use whatever ssh_host the local config provides.
         """
-        from scripts.multi_vm_runner import deploy_code
+        from scripts.multi_vm_runner import deploy_code, VMS
         mock_run.return_value = subprocess.CompletedProcess("rsync", 0)
         deploy_code(dry_run=False)
         rsync_calls = [
             c for c in mock_run.call_args_list
             if "rsync" in str(c)
         ]
-        for c in rsync_calls:
-            # The rsync destination should contain an IP address
-            cmd_list = c.args[0] if c.args else c.kwargs.get("args", [])
-            dst_arg = [a for a in cmd_list if ":" in a and "rsync" not in a]
-            assert dst_arg, f"No destination found in rsync call: {cmd_list}"
-            dst = dst_arg[0]
-            # Must contain an IP, not an unresolvable SSH alias
-            import re
-            assert re.search(r"\d+\.\d+\.\d+\.\d+", dst) or "localhost" in dst, (
-                f"Rsync destination '{dst}' uses SSH alias instead of IP. "
-                f"VM1 has no ~/.ssh/config with alias definitions."
-            )
+        # Each remote VM should appear in an rsync call via its ssh_host
+        remote_vms = [vm for vm in VMS if not is_local_vm(vm)]
+        for vm in remote_vms:
+            found = False
+            for c in rsync_calls:
+                cmd_str = " ".join(str(a) for a in (c.args[0] if c.args else []))
+                if vm.ssh_host in cmd_str or vm.ip in cmd_str:
+                    found = True
+                    break
+            assert found, f"VM {vm.name} (ssh_host={vm.ssh_host}) not found in rsync calls"
 
     @patch("subprocess.run")
     @patch("socket.gethostname", return_value=VMS[0].name)

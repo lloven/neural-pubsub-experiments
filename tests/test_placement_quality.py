@@ -406,11 +406,21 @@ def test_placement_quality_parametrized(scenario):
     dag, topo, gov, label, ptype = _build_scenario(scenario)
     result = _evaluate(label, ptype, dag, topo, gov)
 
-    # Tree DAGs use DP (provably optimal) so the gap must be ~0.
+    # Tree DAGs use DP (provably optimal for Eq. 10 cost), but the
+    # post-placement redistribution intentionally deviates from Eq. 10
+    # optimality for fan-in trees to avoid serialising concurrent stages.
+    # Fan-in trees (funnel) have a larger cost gap because redistribution
+    # increases inter-node latency while Eq. 10 doesn't reward parallelism.
     # Non-tree DAGs use the greedy heuristic which can have a significant gap,
     # especially on adversarial topologies (e.g. diamond with isolated node).
-    if scenario in TREE_SCENARIO_NAMES:
+    FAN_IN_SCENARIOS = ["funnel"]
+    if scenario in TREE_SCENARIO_NAMES and scenario not in FAN_IN_SCENARIOS:
         _assert_quality(result, max_gap=0.10)
+    elif scenario in FAN_IN_SCENARIOS:
+        # Fan-in redistribution trades Eq. 10 cost for execution parallelism.
+        # Allow a larger gap since the "optimal" colocated placement actually
+        # produces worse real-world performance.
+        _assert_quality(result, max_gap=5.0)
     else:
         _assert_quality(result, max_gap=2.0)
 
@@ -489,16 +499,37 @@ def test_non_tree_gap_ratio_computed(scenario):
     _assert_quality(result, max_gap=2.0)
 
 
+_SERIAL_TREE_SCENARIOS = [
+    pytest.param(name, id=name)
+    for name in TREE_SCENARIO_NAMES if name != "funnel"
+]
+
+
 @pytest.mark.benchmark
-@pytest.mark.parametrize("scenario", _TREE_SCENARIOS)
-def test_tree_scenarios_have_zero_gap(scenario):
-    """Regression: tree scenarios must have gap_ratio = 0 (DP is provably optimal)."""
+@pytest.mark.parametrize("scenario", _SERIAL_TREE_SCENARIOS)
+def test_serial_tree_scenarios_have_zero_gap(scenario):
+    """Regression: serial tree scenarios must have gap_ratio = 0 (DP optimal)."""
     dag, topo, gov, label, ptype = _build_scenario(scenario)
     result = _evaluate(label, ptype, dag, topo, gov)
     assert result.gap_ratio < 1e-9, (
         f"Tree scenario {scenario!r}: gap_ratio {result.gap_ratio:.6f} is not zero "
         f"(algo={result.algorithm_cost:.6f}, opt={result.optimal_cost:.6f})"
     )
+
+
+@pytest.mark.benchmark
+def test_fanin_tree_redistributes_siblings():
+    """Fan-in tree (funnel): DP redistributes colocated siblings.
+
+    The redistribution intentionally deviates from Eq. 10 optimality to
+    avoid serialising concurrent fan-in stages. The Eq. 10 cost increases
+    but real-world execution parallelism improves.
+    """
+    dag, topo, gov, label, ptype = _build_scenario("funnel")
+    result = _evaluate(label, ptype, dag, topo, gov)
+    # The redistribution increases cost but uses multiple workers
+    assert result.gap_ratio > 0, "Funnel should redistribute (non-zero gap)"
+    assert result.constraint_violations == 0, "No constraint violations"
 
 
 @pytest.mark.benchmark

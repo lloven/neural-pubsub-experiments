@@ -180,31 +180,36 @@ def _make_failure_fn(
 
 
 def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
-    """Execute a resilience run on the distributed 4-VM cluster."""
+    """Execute a resilience run on the distributed 4-VM cluster.
+
+    Failure target mapping for 4-VM O-RAN topology:
+    - embb-kill / funnel-*: kill worker on VM2 (eMBB domain d2)
+    - urllc-kill: kill worker on VM1 (URLLC domain d1)
+    """
     from scripts import multi_vm_runner
     run_id = run.run_id
     cfg = CONFIGS[run.config_name]
     strat_env = _strategy_env(run.strategy)
 
-    pipeline_mix_fusion = cfg.get("pipeline_mix_fusion", "0.0")
-    mix_cqi = "0.0" if pipeline_mix_fusion != "0.0" else "0.5"
-    mix_anomaly = "0.0" if pipeline_mix_fusion != "0.0" else "0.5"
-
-    # Map failure target to distributed VM + container
+    # Map failure target to the correct VM based on worker slice type.
+    # VM1=URLLC (d1), VM2=eMBB (d2), VM3=eMBB (d3), VM4=best-effort (d4).
     failure_fn = None
     if run.failure_type == "worker":
-        # Kill a worker on VM1 (domain 1)
+        target = cfg["failure_target"]
+        if "urllc" in target:
+            vm = multi_vm_runner.VMS[0]   # VM1: URLLC workers
+        else:
+            vm = multi_vm_runner.VMS[1]   # VM2: eMBB workers
         failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
-            vm=multi_vm_runner.VMS[0],
+            vm=vm,
             container="deploy-worker-0-1",
             delay_s=run.failure_delay_s,
         )
 
     workload_env = {
-        "PIPELINE_MIX_CQI": mix_cqi,
-        "PIPELINE_MIX_ANOMALY": mix_anomaly,
-        "PIPELINE_MIX_FUSION": pipeline_mix_fusion,
+        "PIPELINE_TYPE": "cqi_chain",
+        "ARRIVAL_RATE": "5.0",
     }
     if cfg.get("funnel_mode"):
         workload_env["FUNNEL_MODE"] = cfg["funnel_mode"]
@@ -224,7 +229,7 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
         warmup_s=run.warmup_s,
         measurement_s=run.measurement_s,
         failure_fn=failure_fn,
-        wan_emulation=False,
+        wan_emulation=True,
         dry_run=dry_run,
     )
     return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",

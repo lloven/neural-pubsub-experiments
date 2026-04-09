@@ -127,38 +127,51 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
 
     failure_fn = None
     if run.broker_failure:
+        # Kill the broker on VM2 (domain d2, CU/near-RT-RIC)
         failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
-            vm=multi_vm_runner.VMS[1],  # VM2 = domain 2
+            vm=multi_vm_runner.VMS[1],
             container="deploy-broker-1",
             delay_s=run.failure_delay_s,
         )
     elif run.network_partition:
+        # Partition between edge site (VM2) and cloud site (VM3)
         failure_fn = partial(
             multi_vm_runner.inject_remote_partition,
-            vm_src=multi_vm_runner.VMS[0],
-            vm_dst=multi_vm_runner.VMS[1],
+            vm_src=multi_vm_runner.VMS[1],
+            vm_dst=multi_vm_runner.VMS[2],
             delay_s=run.failure_delay_s,
         )
 
     gov_config = "all" if run.governance else "none"
 
+    # Map placement_strategy to broker args
+    broker_module = None
+    placement = None
+    placement_mode = run.placement_strategy
+    if run.placement_strategy == "kafka":
+        # Static broker with round-robin for the federation baseline
+        broker_module = "src.broker.static_broker"
+        placement = "round_robin"
+        placement_mode = "neural"  # static broker ignores this
+
     multi_vm_runner.run_single(
         config=run.config_name,
         run_id=run_id,
         seed=run.seed,
-        placement_mode=run.placement_strategy,
+        placement_mode=placement_mode,
         governance_config=gov_config,
+        broker_module=broker_module,
+        placement=placement,
         workload_env={
-            "PIPELINE_MIX_CQI": "1.0",
-            "PIPELINE_MIX_ANOMALY": "0.0",
-            "PIPELINE_MIX_FUSION": "0.0",
+            "PIPELINE_TYPE": "cqi_chain",
+            "ARRIVAL_RATE": "5.0",
         },
         results_subdir="federation",
         warmup_s=run.warmup_s,
         measurement_s=run.measurement_s,
         failure_fn=failure_fn,
-        wan_emulation=False,
+        wan_emulation=True,
         dry_run=dry_run,
     )
     return {"run_id": run_id, "status": "completed" if not dry_run else "dry_run",
