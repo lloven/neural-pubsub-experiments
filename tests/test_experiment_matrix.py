@@ -169,16 +169,68 @@ class TestDataIntegrity:
         assert expected_run_count("stress") == 60  # 12 x 5
 
     def test_market_run_count(self):
-        assert expected_run_count("market") == 225  # 5 configs x 3 pipelines x 3 loads x 5 seeds
+        assert expected_run_count("market") == 270  # 6 configs x 3 pipelines x 3 loads x 5 seeds
 
     def test_governance_run_count(self):
         assert expected_run_count("governance") == 60  # 4 configs x 3 pipelines x 1 load x 5 seeds
 
-    def test_market_has_5_configs(self):
-        assert len(get_configs("market")) == 5
+    def test_market_has_6_configs(self):
+        assert len(get_configs("market")) == 6
 
     def test_governance_has_4_configs(self):
         assert len(get_configs("governance")) == 4
+
+
+# ---------------------------------------------------------------------------
+# print_summary()
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Manuscript hypothesis mapping
+# ---------------------------------------------------------------------------
+
+
+class TestHypothesisMap:
+    """HYPOTHESIS_MAP links manuscript IDs to experiment phases and configs."""
+
+    def test_hypothesis_map_exists(self):
+        from scripts.experiment_matrix import HYPOTHESIS_MAP
+        assert isinstance(HYPOTHESIS_MAP, dict)
+
+    def test_all_tier2_hypotheses_present(self):
+        from scripts.experiment_matrix import HYPOTHESIS_MAP
+        tier2 = [
+            "H-NEAR", "H-EDGE", "H-ENTANGLE", "H-OVERLOAD",
+            "H-COMPOSE", "H-HEURISTIC", "H-ADAPT",
+            "H-FEDERATION", "H-RESILIENCE",
+        ]
+        for h in tier2:
+            assert h in HYPOTHESIS_MAP, f"Missing hypothesis {h}"
+
+    def test_hypothesis_phases_are_valid(self):
+        from scripts.experiment_matrix import HYPOTHESIS_MAP, EXPERIMENTS
+        for h_id, spec in HYPOTHESIS_MAP.items():
+            phase = spec["phase"]
+            assert phase in EXPERIMENTS, (
+                f"Hypothesis {h_id} references unknown phase {phase!r}"
+            )
+
+    def test_hypothesis_configs_exist_in_phase(self):
+        from scripts.experiment_matrix import HYPOTHESIS_MAP, EXPERIMENTS
+        for h_id, spec in HYPOTHESIS_MAP.items():
+            if "configs" not in spec:
+                continue
+            phase_configs = EXPERIMENTS[spec["phase"]]["configs"]
+            for cfg in spec["configs"]:
+                assert cfg in phase_configs, (
+                    f"Hypothesis {h_id}: config {cfg!r} not in "
+                    f"phase {spec['phase']!r} configs {phase_configs}"
+                )
+
+    def test_oracle_global_in_market_configs(self):
+        from scripts.experiment_matrix import EXPERIMENTS
+        assert "oracle-global" in EXPERIMENTS["market"]["configs"]
 
 
 # ---------------------------------------------------------------------------

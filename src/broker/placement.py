@@ -421,6 +421,7 @@ def market_mode_placement(
     clearing_prices: dict[str, dict[str, float]],
     wan_cost: float,
     local_domain: str,
+    load_aware: bool = False,
 ) -> Optional[dict[str, str]]:
     """Allocate pipeline stages using market clearing prices.
 
@@ -436,6 +437,14 @@ def market_mode_placement(
         clearing_prices: {domain_id: {stage_type: price}} from market clearing.
         wan_cost: Additional cost for cross-domain data transfer.
         local_domain: The domain where this pipeline was submitted.
+        load_aware: When True, pick the least-loaded feasible worker
+            within the chosen domain (Walrasian price discovery via
+            residual load: scarce or slow workers accumulate load and
+            become "expensive" via reduced residual capacity in the
+            next clearing round). When False (default), pick the first
+            feasible worker in iteration order — legacy behaviour
+            preserved for the main campaign's market runs that were
+            collected before this flag existed.
 
     Returns:
         Placement dict {stage_id: node_id} or None if rejected.
@@ -477,22 +486,41 @@ def market_mode_placement(
         total_cost += stage_cost
 
         # Pick a worker from the chosen domain
-        # (simplest: first available worker with capacity)
         workers = domain_workers.get(chosen_domain, [])
+        candidates = [
+            w for w in workers
+            if w.residual_capacity >= stage.computational_demand
+        ]
         placed = False
-        for worker in workers:
-            if worker.residual_capacity >= stage.computational_demand:
-                placement[stage.id] = worker.node_id
-                placed = True
-                break
+        if candidates:
+            if load_aware:
+                # Walrasian price discovery: scarce workers accumulate
+                # load and become "expensive" via reduced residual
+                # capacity. Picking the least-loaded worker realises
+                # this preference.
+                chosen = min(candidates, key=lambda w: w.current_load)
+            else:
+                # Legacy: first feasible worker in iteration order.
+                # Preserves the main campaign market runs which were
+                # collected before this flag existed.
+                chosen = candidates[0]
+            placement[stage.id] = chosen.node_id
+            placed = True
+
         if not placed:
             # No available worker in chosen domain → try local fallback
-            for worker in domain_workers.get(local_domain, []):
-                if worker.residual_capacity >= stage.computational_demand:
-                    placement[stage.id] = worker.node_id
-                    total_cost = total_cost - stage_cost + local_price
-                    placed = True
-                    break
+            fallback = [
+                w for w in domain_workers.get(local_domain, [])
+                if w.residual_capacity >= stage.computational_demand
+            ]
+            if fallback:
+                if load_aware:
+                    chosen = min(fallback, key=lambda w: w.current_load)
+                else:
+                    chosen = fallback[0]
+                placement[stage.id] = chosen.node_id
+                total_cost = total_cost - stage_cost + local_price
+                placed = True
             if not placed:
                 return None  # Cannot place this stage anywhere
 
@@ -852,10 +880,14 @@ def _dp_placement(
     if best_sink_node < 0:
         raise RuntimeError("No feasible DP placement found for the tree DAG.")
 
-    # --- Backtracking ---
-    # Starting from the optimal sink assignment, recursively follow the
-    # `choice` table to recover the optimal node assignment for every
-    # predecessor stage in the tree.
+    # --- Backtracking with load-aware redistribution ---
+    # The DP optimises each sub-tree independently, so sibling sub-trees
+    # (e.g., 4 parallel fan-in sources) may all pick the same node.
+    # This serialises what should be concurrent execution.
+    #
+    # Fix: after initial backtracking, detect colocated siblings and
+    # redistribute them to lightly-loaded feasible nodes, preserving
+    # the DP-optimal inter-stage edge structure for the sink assignment.
     placement: dict[str, str] = {}
 
     def _trace(stage_id: str, node_idx: int) -> None:
@@ -864,6 +896,60 @@ def _dp_placement(
             _trace(pred_id, pred_ni)
 
     _trace(sink_id, best_sink_node)
+
+    # --- Post-placement redistribution for fan-in colocation ---
+    # For each node with siblings (multiple predecessors of the same
+    # successor), check if independent stages share a node. If so,
+    # move the cheaper stages to alternative feasible nodes.
+    committed_load: dict[str, float] = {}
+    for sid, nid in placement.items():
+        committed_load[nid] = (
+            committed_load.get(nid, 0.0) + stages[sid].computational_demand
+        )
+
+    # Find stages that share a node with a sibling (same parent in DAG)
+    for stage_id in topo:
+        predecessors = dag.predecessors(stage_id)
+        if len(predecessors) < 2:
+            continue
+        # Group siblings by assigned node
+        node_to_preds: dict[str, list[str]] = {}
+        for pred_id in predecessors:
+            nid = placement[pred_id]
+            node_to_preds.setdefault(nid, []).append(pred_id)
+        # Redistribute colocated siblings
+        for nid, colocated in node_to_preds.items():
+            if len(colocated) <= 1:
+                continue
+            # Keep the first (heaviest-demand) sibling on this node;
+            # move others to the least-loaded feasible alternative.
+            colocated.sort(key=lambda s: -stages[s].computational_demand)
+            for pred_id in colocated[1:]:
+                pred_stage = stages[pred_id]
+                best_alt = None
+                best_alt_load = math.inf
+                for node in topology.nodes:
+                    if node.node_id == nid:
+                        continue
+                    if not _is_node_feasible_simple(pred_stage, node, governance):
+                        continue
+                    current = committed_load.get(node.node_id, 0.0)
+                    residual = node.capacity - node.current_load - current
+                    if residual < pred_stage.computational_demand - 1e-9:
+                        continue
+                    if current < best_alt_load:
+                        best_alt_load = current
+                        best_alt = node.node_id
+                if best_alt is not None:
+                    # Move this sibling to the alternative node
+                    old_nid = placement[pred_id]
+                    placement[pred_id] = best_alt
+                    committed_load[old_nid] -= pred_stage.computational_demand
+                    committed_load[best_alt] = (
+                        committed_load.get(best_alt, 0.0)
+                        + pred_stage.computational_demand
+                    )
+
     return placement
 
 

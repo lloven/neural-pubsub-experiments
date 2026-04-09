@@ -1,9 +1,9 @@
 # Experiment Design: Neural Pub/Sub
 
 **Paper:** Neural Pub/Sub: Distributed AI Orchestration across the 6G Computing Continuum
-**Target venue:** Elsevier Computer Networks (DCN)
-**Manuscript:** `Manuscripts/Neural Pub-Sub (Elsevier DCN)/` (Overleaf-synced)
-**Companion:** Neural Router paper (`Manuscripts/Neural Router (Elsevier DCN)/`; experiments in `Experiments/neural-router/`)
+**Target venue:** IEEE Transactions on Network Science and Engineering (TNSE)
+**Manuscript:** `Manuscripts/Neural Pub-Sub (IEEE TNSE)/` (Overleaf-synced via Dropbox)
+**Companion:** Neural Router paper (`Manuscripts/Neural Router (Elsevier FGCS)/`; experiments in `Experiments/neural-router/`)
 
 ---
 
@@ -29,6 +29,39 @@ The experiment answers three questions about distributing AI inference pipelines
 | H4 | Governance constraints (data sovereignty enforcement) introduce measurable but bounded latency overhead | Slicing, Federation |
 | H5 | Under hierarchical federation, summary propagation overhead grows linearly with the number of domains | Federation, Stress |
 | H6 | The system recovers from single-point failures within two summary propagation intervals, with detection time and re-placement time reported separately | Resilience |
+
+### Manuscript Hypothesis Mapping (Tier 2)
+
+The manuscript (IEEE TNSE) uses a different hypothesis naming scheme. This table maps manuscript hypothesis IDs to experiment phases and configs:
+
+| Manuscript H | Internal H | EXPERIMENT.md Phase | Configs | Runs |
+|---|---|---|---|---|
+| H-OVERHEAD | H2 | Baseline (A) | S1/S2/S3 | Tier 1 (confirmed) |
+| H-TRANSPORT | H2 | Slicing (B) | ANOVA placement x transport | Tier 1 (confirmed) |
+| H-SLICE | H1/H3 | Slicing (B) | flat, B2 | Tier 1 (confirmed) |
+| H-GOV | H4 | Slicing (B) | B2, B3 | Tier 1 (confirmed) |
+| H-NEAR | -- | Market | oracle-global, market-quad, rr-global | 3x3x3x5 = 135 |
+| H-EDGE | -- | Market | oracle-global, market-quad (tree/SP only) | subset of above |
+| H-ENTANGLE | -- | Market | oracle-global, market-quad (entangled only) | subset of above |
+| H-OVERLOAD | -- | Market | oracle-global vs market-quad at 3 loads | subset of above |
+| H-COMPOSE | -- | Governance | gov-none, gov-edge-only, gov-cloud-only, gov-both | 4x3x1x5 = 60 |
+| H-HEURISTIC | -- | Market | market-quad vs locality/greedy/spillover | 4x3x3x5 = 180 |
+| H-ADAPT | -- | Market | market-quad (load step 5->10 pps at t=5min) | separate protocol |
+| H-FEDERATION | H5 | Federation (C) | C2, C3, C4 | 3x5 = 15 |
+| H-RESILIENCE | H6 | Resilience (D) | D1, D2 x {S1, S3} | 2x2x5 = 20 |
+| H-RR-RECOVER | -- | Ablation | failure scenario, oracle/rr/market x 3 pipelines | 3x3x5 = 45 |
+| H-RR-SATURATE | -- | Ablation | sat-20/25/30 x oracle/rr/market x 3 pipelines | 3x3x3x5 = 135 |
+| H-RR-HETERO | -- | Ablation | heterogeneous scenario, oracle/rr/market x 3 pipelines | 3x3x5 = 45 |
+
+**Oracle-global deployment**: The oracle is a single centralised broker on VM1 with full global visibility and congestion-aware DP placement. All 48 workers (across 4 VMs) register with VM1's broker via `WORKER_BROKER_URL`. VM2-4 run workers only (no broker). The DP solver includes post-placement redistribution to avoid serialising concurrent fan-in stages. This is the theoretical upper bound.
+
+**Conventional centralized (rr-global)**: Same single-broker deployment as the oracle, but with round-robin worker assignment instead of cost-optimised placement. Represents what conventional orchestrators (Kubeflow, Argo) achieve with full visibility but no market or cost-aware placement.
+
+**Overload argument (H-OVERLOAD)**: The theoretical oracle is omniscient with instant computation. The practical oracle is a single broker subject to queuing at high arrival rates. At high load (10 pps), the single-broker bottleneck causes the oracle to degrade while the market distributes placement across 4 brokers. The efficiency gap Delta_eff = 1 - eta_market/eta_oracle is expected to shrink (or invert) with increasing load. The load dimension (2, 5, 10 pps) in the 270-run allocation matrix captures this effect.
+
+**Ablation phase**: Five stress scenarios (failure, sat-20, sat-25, sat-30, heterogeneous) test the round-robin baseline's failure modes by isolating distinct Walrasian mechanisms (information completeness, admission control, price discovery). The saturation scenario is a 3-rate sweep around the empirically derived 25 pps inflection point so the rate dependence (not a single anecdotal datapoint) is characterised. The main allocation experiments use uniform conditions where rr-global is structurally hard to beat; the ablation introduces conditions that expose its limitations. Uses a separate compose file (`docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of the main worker) so the main campaign infrastructure is not modified during ablation runs. The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement`. The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection).
+
+**Total Tier 2 runs**: 590 (270 allocation + 60 governance + 15 federation + 20 resilience + 225 ablation) = ~100 hours.
 
 ## 3. Experimental Variables
 
@@ -280,6 +313,42 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 - Recovery timeline for E3/E4/E7/E8: detection_time, recovery_time, degradation_depth
 - Strategy effect size: S3 advantage over S1 at 10 pps vs 20 pps, with and without failure
 
+### Ablation: Stress scenarios where rr-global breaks down
+
+**Purpose:** Establish that the round-robin baseline's (rr-global) competitive performance in the main allocation experiments is conditional on uniform operating conditions (identical worker capacities, no failures, moderate arrival rates). Five stress scenarios introduce conditions absent from the main campaign and expose rr-global's failure modes. Each scenario isolates a distinct Walrasian mechanism that round-robin lacks by construction: information completeness (failure), admission control (saturation sweep), price discovery (heterogeneous capacities). Tests H-RR-RECOVER, H-RR-SATURATE, H-RR-HETERO.
+
+**Strategies:** 3 (oracle-global, rr-global, market-quad). The other heuristics (locality-only, latency-greedy, spillover) are excluded — the ablation is a focused comparison between the centralised baselines and the market mechanism.
+
+**Pipelines:** all 3 (cqi-chain, anomaly-sp, ran-entangled).
+
+**Seeds:** 5 (DEFAULT_SEEDS).
+
+| Scenario | Theory | Stress factor | Configuration | Expected effect |
+|----------|--------|---------------|---------------|-----------------|
+| failure | Information completeness | Worker kill at t=90s of measurement | 5 pps, kill `deploy-worker-0-1` on VM2 | rr-global loses ~1 health-check interval of throughput; market reroutes within 1 dispatch round (dead worker price → ∞) |
+| sat-20 | Admission control | Pre-saturation 20 pps | 20 pps, no failure | both strategies sustain throughput; baseline for the sweep |
+| sat-25 | Admission control | At-saturation 25 pps | 25 pps, no failure | rr-global tail latency begins to diverge; market clearing prices start to bind |
+| sat-30 | Admission control | Above-saturation 30 pps | 30 pps, no failure | rr-global queues unboundedly; market rejects unaffordable pipelines via clearing prices |
+| heterogeneous | Price discovery | Edge VMs 2x slower, cloud 1.5x faster | `WORKER_PROCESSING_SPEED=2.0` on VM1/VM2; `=0.67` on VM3/VM4 | rr-global splits load equally and bottlenecks on slow workers; market discovers fast workers via load-aware prices |
+
+**Run length:** 60s warmup + 180s measurement = 4 min/run (vs 14 min standard, to fit deadline). Failure injection at t=90s leaves 90s post-failure observation per run.
+
+**Total:** 5 scenarios × 3 strategies × 3 pipelines × 5 seeds = **225 runs (~15 hours)**.
+
+**Infrastructure separation:** The ablation uses a distinct compose file (`deploy/docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of `src.worker.worker`) so the main campaign's compose stack and worker code are unchanged. The ablation infrastructure is wired through `multi_vm_runner.start_cluster`'s `compose_file` and `per_vm_env` parameters, which default to existing behaviour for the main campaign.
+
+**Market load-awareness flag:** The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement` (picks the least-loaded feasible worker rather than the first feasible one). The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection). The fix is feature-flagged so the running campaign is undisturbed; see `EXPERIMENT-PLAN.md` "Resolved" section for the full discovery and reproducibility discussion.
+
+**Phase runner:** `scripts/run_ablation.py`. Standard CLI: `--configs failure,sat-20,sat-25,sat-30,heterogeneous`, `--strategies`, `--pipelines`, `--seeds`, `--resume`. Run via `python -m scripts.run_ablation --topology distributed --resume` after the main campaign completes.
+
+**Expected outputs:**
+- Per-scenario CR and latency comparison across the 3 strategies
+- Failure scenario: detection_time and recovery_time for each strategy (post-hoc analysis from `analyze_recovery.py`)
+- Saturation scenario: tail-latency divergence between rr-global and market
+- Heterogeneous scenario: per-VM utilisation showing market preferring fast cloud workers
+
+**Status:** Pending. Will run after the main campaign completes.
+
 ### Phase F: Scaling study (simulation)
 
 **Purpose:** Validate that the federation architecture scales beyond the 2-domain testbed. Tests H5. Pure simulation using EISim.
@@ -490,28 +559,60 @@ git add ... && git commit && git push origin main && git push 5gtn main
 
 ### Step 5: Deploy to remote
 ```bash
-ssh 5gtn-npubsub "cd ~/neural-pubsub && git fetch origin && git reset --hard origin/main"
+# From laptop: rsync code to all VMs (excludes multi_vm_config_local.py)
+python -c "from scripts.multi_vm_runner import deploy_code; deploy_code()"
 ```
+Note: `deploy_code()` uses `vm.ssh_host` from the local config. From the laptop, this goes through pomerium. From VM1, it uses direct IPs. The per-VM `multi_vm_config_local.py` is excluded from rsync to prevent overwriting VM1's direct-IP config with the laptop's pomerium-alias config.
 
 ### Step 6: Remote dry-run
 ```bash
-ssh 5gtn-npubsub "cd ~/neural-pubsub && python -m scripts.run_PHASE --configs CONFIG --seeds 99 --dry-run"
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --topology distributed --configs CONFIG --seeds 99 --dry-run"
 ```
 
 ### Step 7: Remote smoke (45s) + extended smoke (90s)
 ```bash
 # Quick smoke (45s) — pipeline works on target host
-ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 15 --measurement 30"
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --topology distributed --configs CONFIG --seeds 99 --warmup 15 --measurement 30"
 
 # Extended smoke (90s) — treatment effect + no silent errors
-ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --configs CONFIG --seeds 99 --warmup 30 --measurement 60"
+ssh 5gtn-npubsub "cd ~/neural-pubsub && python3 -m scripts.run_PHASE --topology distributed --configs CONFIG --seeds 99 --warmup 30 --measurement 60"
 ```
-L38: Verify treatment effect. L39: Check for silent errors. Compare against local smoke.
+L38: Verify treatment effect. L39: Check for silent errors. Compare against local smoke. L32: Smoke must run on the target host through the same code path as the full campaign.
 
-### Step 8: Launch full runs
+### Step 8: Launch full campaign on VM1 in tmux
+The orchestrator MUST run on VM1 in a tmux session, not via laptop SSH. This ensures the campaign survives SSH disconnections and pomerium session expiry.
+
 ```bash
-ssh 5gtn-npubsub "cd ~/neural-pubsub && ./run-experiments.sh phase-X --resume"
+# Create tmux session on VM1 (from laptop or VM1 console)
+ssh 5gtn-npubsub "tmux new-session -d -s campaign \
+  'cd ~/neural-pubsub && python3 -m scripts.run_PHASE --topology distributed --resume 2>&1 | tee results/PHASE/campaign.log'"
+
+# Monitor progress
+ssh 5gtn-npubsub "grep -c '=== Completed' ~/neural-pubsub/results/PHASE/campaign.log"
+
+# Live view (interactive)
+ssh -t 5gtn-npubsub "tmux attach -t campaign"
+
+# Graceful stop (sends SIGINT, triggers cleanup handler)
+ssh 5gtn-npubsub "tmux send-keys -t campaign C-c"
 ```
+
+NEVER use `nohup` from a pomerium SSH session — the process may survive but tmux provides attach/detach/signal capabilities that `nohup` lacks.
+
+### Pre-flight checklist (MUST execute before every campaign launch)
+
+Run this checklist before Step 8. Every item must pass. If any fails, STOP and fix before launching. References: L23 (multi-level smoke), L30 (validate content), L31 (TDD), L32 (smoke on target), L38 (verify treatment), L39 (no silent errors), L47 (follow protocol).
+
+- [ ] **L31 — Tests pass locally**: `pytest tests/ -x --ignore=tests/test_system.py` — 0 failures. New tests written for any code changes.
+- [ ] **Code deployed**: `deploy_code()` completed for all VMs, no errors
+- [ ] **VM1 config intact**: `ssh 5gtn-npubsub "cat ~/neural-pubsub/scripts/multi_vm_config_local.py"` shows `lloven@193.166.32.x` for VM2-4 (NOT pomerium aliases)
+- [ ] **VM1→VM2 SSH works**: `ssh 5gtn-npubsub "ssh -o ConnectTimeout=5 lloven@193.166.32.50 hostname"` returns `5gtn50`
+- [ ] **Dry-run correct**: `--dry-run` on VM1 shows correct compose commands, oracle mode for oracle/rr-global
+- [ ] **L23/L32 — Quick smoke from VM1** (not laptop): 1 run with `--warmup 15 --measurement 30` executed FROM VM1 via SSH. Verify: CSV has ≥1 success=True row, non-zero latency (L30)
+- [ ] **L23 — Extended smoke from VM1**: 1 run with `--warmup 30 --measurement 60`. Verify treatment visible (L38), no silent errors in logs (L39)
+- [ ] **L38 — Treatment verified**: different strategies produce different placements or metrics (not all identical)
+- [ ] **Progress file clean**: no stale `running` entries; invalidated runs marked `queued`; no old CSVs that will be rediscovered by `--resume`
+- [ ] **tmux session**: campaign launched in tmux on VM1, NOT via nohup/laptop SSH
 
 ### Failure injection experiments: additional checks
 - L38: Every failure config must show measurable treatment effect (changed metrics post-injection)

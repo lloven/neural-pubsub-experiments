@@ -283,6 +283,8 @@ def _rsync(src_host: str, src_path: str, dst_path: str, dry_run: bool = False) -
 _RSYNC_EXCLUDES = [
     ".git", "results", "__pycache__", ".pytest_cache",
     "*.pyc", ".mypy_cache", "logs", ".env.local",
+    # Never overwrite per-VM config (SSH aliases differ laptop vs VM1)
+    "scripts/multi_vm_config_local.py",
 ]
 
 
@@ -297,10 +299,12 @@ def deploy_code(dry_run: bool = False) -> None:
         if is_local_vm(vm):
             logger.info("Skipping code deploy to %s (local VM).", vm.name)
             continue
-        # Use user@IP for rsync (not SSH alias) — the orchestrator VM
-        # may not have ~/.ssh/config with alias definitions.
-        user = vm.ssh_host.split("@")[0] if "@" in vm.ssh_host else "lloven"
-        dst = f"{user}@{vm.ip}:{REMOTE_PROJECT_DIR}/"
+        # Use vm.ssh_host for rsync — it respects SSH config aliases
+        # (e.g., pomerium proxy from laptop) and direct user@IP from VM1.
+        ssh_target = vm.ssh_host
+        if "@" not in ssh_target:
+            ssh_target = f"lloven@{ssh_target}"
+        dst = f"{ssh_target}:{REMOTE_PROJECT_DIR}/"
         exclude_flags = []
         for pattern in _RSYNC_EXCLUDES:
             exclude_flags.extend(["--exclude", pattern])
@@ -343,9 +347,23 @@ def start_cluster(
     broker_module: str | None = None,
     placement: str | None = None,
     extra_env: dict[str, str] | None = None,
+    per_vm_env: dict[str, dict[str, str]] | None = None,
+    compose_file: str = "deploy/docker-compose.vm.yaml",
+    oracle_mode: bool = False,
     dry_run: bool = False,
 ) -> None:
-    """Start compose stacks on all VMs."""
+    """Start compose stacks on all VMs.
+
+    When ``oracle_mode`` is True, only VM1 runs a broker. VM2-4 run
+    workers only, all registering with VM1's broker. This implements
+    the centralised oracle (upper-bound baseline) described in
+    DistributionArch.tex Sec. 4.4.
+
+    ``compose_file`` and ``per_vm_env`` allow ablation experiments to
+    use alternative compose files (e.g., ``docker-compose.vm-ablation.yaml``)
+    and per-VM env overrides (e.g., ``WORKER_PROCESSING_SPEED`` for
+    heterogeneous capacity scenarios).
+    """
     for vm in VMS:
         gov_enabled = _governance_for_vm(vm, governance_config)
 
@@ -354,30 +372,57 @@ def start_cluster(
             f"GOVERNANCE_ENABLED={gov_enabled}",
             f"VM_IP={vm.ip}",
         ]
+
+        # Oracle mode: VM2-4 workers register with VM1's broker
+        if oracle_mode and vm != VMS[0]:
+            env_parts.append(f"WORKER_BROKER_URL=http://{VMS[0].ip}:8080")
+        else:
+            env_parts.append("WORKER_BROKER_URL=http://localhost:8080")
+
         if broker_module:
             env_parts.append(f"BROKER_MODULE={broker_module}")
         if placement:
             env_parts.append(f"PLACEMENT={placement}")
         if extra_env:
             env_parts.extend(f"{k}={v}" for k, v in extra_env.items())
+        if per_vm_env and vm.name in per_vm_env:
+            env_parts.extend(f"{k}={v}" for k, v in per_vm_env[vm.name].items())
 
         env_overrides = " ".join(env_parts)
-        cmd = (
-            f"cd {REMOTE_PROJECT_DIR} && "
-            f"{env_overrides} "
-            f"docker compose --env-file deploy/{vm.env_file} "
-            f"-f deploy/docker-compose.vm.yaml up -d"
-        )
+
+        if oracle_mode and vm != VMS[0]:
+            # VM2-4: start workers only (no broker)
+            worker_services = " ".join(f"worker-{i}" for i in range(12))
+            cmd = (
+                f"cd {REMOTE_PROJECT_DIR} && "
+                f"{env_overrides} "
+                f"docker compose --env-file deploy/{vm.env_file} "
+                f"-f {compose_file} up -d {worker_services}"
+            )
+        else:
+            cmd = (
+                f"cd {REMOTE_PROJECT_DIR} && "
+                f"{env_overrides} "
+                f"docker compose --env-file deploy/{vm.env_file} "
+                f"-f {compose_file} up -d"
+            )
         _exec(vm, cmd, dry_run=dry_run)
 
 
-def stop_cluster(dry_run: bool = False) -> None:
-    """Stop and remove compose stacks on all VMs."""
+def stop_cluster(
+    compose_file: str = "deploy/docker-compose.vm.yaml",
+    dry_run: bool = False,
+) -> None:
+    """Stop and remove compose stacks and workload container on all VMs."""
+    # Kill the workload container (started by docker run, not compose-managed).
+    # Must happen first — it may be writing results that compose down would interrupt.
+    _exec(VMS[0], "docker kill npubsub-workload 2>/dev/null || true", dry_run=dry_run)
+
     for vm in VMS:
         cmd = (
             f"cd {REMOTE_PROJECT_DIR} && "
             f"docker compose --env-file deploy/{vm.env_file} "
-            f"-f deploy/docker-compose.vm.yaml down --remove-orphans"
+            f"-f {compose_file} down --remove-orphans"
         )
         _exec(vm, cmd, dry_run=dry_run)
 
@@ -399,15 +444,26 @@ def _governance_for_vm(vm: VMConfig, governance_config: str) -> str:
 # Experiment execution
 # ---------------------------------------------------------------------------
 
-def wait_for_federation(timeout_s: int = 120, dry_run: bool = False) -> bool:
-    """Wait until all 4 brokers respond to health checks."""
+def wait_for_federation(
+    timeout_s: int = 120,
+    oracle_mode: bool = False,
+    dry_run: bool = False,
+) -> bool:
+    """Wait until brokers respond to health checks.
+
+    In normal mode, checks all 4 VMs' brokers.
+    In oracle mode, checks only VM1's broker (the sole broker).
+    """
     if dry_run:
-        logger.info("[DRY RUN] Would wait for federation...")
+        logger.info("[DRY RUN] Would wait for %s...",
+                     "oracle broker" if oracle_mode else "federation")
         return True
+    vms_to_check = [VMS[0]] if oracle_mode else VMS
+    label = "Oracle broker" if oracle_mode else "All 4 brokers"
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         all_ok = True
-        for vm in VMS:
+        for vm in vms_to_check:
             try:
                 result = _exec(vm, "curl -sf http://localhost:8080/health")
                 if '"status"' not in result:
@@ -418,10 +474,10 @@ def wait_for_federation(timeout_s: int = 120, dry_run: bool = False) -> bool:
                 all_ok = False
                 break
         if all_ok:
-            logger.info("All 4 brokers healthy.")
+            logger.info("%s healthy.", label)
             return True
         time.sleep(5)
-    logger.error("Federation timeout after %ds", timeout_s)
+    logger.error("Health-check timeout after %ds", timeout_s)
     return False
 
 
@@ -462,18 +518,21 @@ def run_single(
     broker_module: str | None = None,
     placement: str | None = None,
     extra_env: dict[str, str] | None = None,
+    per_vm_env: dict[str, dict[str, str]] | None = None,
+    compose_file: str = "deploy/docker-compose.vm.yaml",
     workload_env: dict[str, str] | None = None,
     results_subdir: str = "market",
     failure_fn: object | None = None,
     wan_emulation: bool = True,
+    oracle_mode: bool = False,
     run_id: str | None = None,
     dry_run: bool = False,
 ) -> None:
     """Execute a single experiment run on the 4-VM cluster."""
     run_id = run_id or f"{config}_seed-{seed}"
-    logger.info("=== Run: %s (placement=%s, governance=%s, broker=%s) ===",
+    logger.info("=== Run: %s (placement=%s, governance=%s, broker=%s, oracle=%s) ===",
                 run_id, placement_mode, governance_config,
-                broker_module or "neural_broker")
+                broker_module or "neural_broker", oracle_mode)
 
     # 1. Start cluster
     start_cluster(
@@ -481,6 +540,9 @@ def run_single(
         broker_module=broker_module,
         placement=placement,
         extra_env=extra_env,
+        per_vm_env=per_vm_env,
+        compose_file=compose_file,
+        oracle_mode=oracle_mode,
         dry_run=dry_run,
     )
 
@@ -488,10 +550,10 @@ def run_single(
     if wan_emulation:
         setup_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
 
-    # 3. Wait for federation
-    if not wait_for_federation(dry_run=dry_run):
+    # 3. Wait for federation (oracle: only VM1 broker)
+    if not wait_for_federation(oracle_mode=oracle_mode, dry_run=dry_run):
         logger.error("Federation failed, skipping run %s", run_id)
-        stop_cluster(dry_run=dry_run)
+        stop_cluster(compose_file=compose_file, dry_run=dry_run)
         return
 
     # 4. Start failure injection if configured (runs in background thread)
@@ -508,7 +570,7 @@ def run_single(
     workload_cmd = (
         f"cd {REMOTE_PROJECT_DIR} && "
         f"mkdir -p results/{results_subdir} && "
-        f"docker run --rm --network=host --user $(id -u):$(id -g) "
+        f"docker run --rm --name npubsub-workload --network=host --user $(id -u):$(id -g) "
         f"--entrypoint python3 "
         f"{env_flags}"
         f"-v $PWD/results:/results "
@@ -533,7 +595,7 @@ def run_single(
     # 8. Teardown
     if wan_emulation:
         teardown_wan_emulation(VMS[1], VMS[2], dry_run=dry_run)
-    stop_cluster(dry_run=dry_run)
+    stop_cluster(compose_file=compose_file, dry_run=dry_run)
 
     logger.info("=== Completed: %s ===", run_id)
 

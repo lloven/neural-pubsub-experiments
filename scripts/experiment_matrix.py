@@ -70,7 +70,8 @@ EXPERIMENTS: dict[str, dict] = {
         "description": "Market-based allocation (4-domain O-RAN, 2+2 edge/cloud topology)",
         "configs": [
             # --- Allocation strategies (run at all 3 pipeline types x 3 loads) ---
-            "oracle-global",       # single broker, full visibility across all 4 domains
+            "oracle-global",       # centralised upper bound: single broker on VM1, all 48 workers
+            "rr-global",           # conventional centralised baseline: single broker, round-robin
             "market-quad",         # 4 federated brokers, price-signal coordination
             "locality-only",       # each domain handles own traffic, no cross-domain
             "latency-greedy",      # always pick lowest-latency worker (allows cross-domain)
@@ -80,7 +81,7 @@ EXPERIMENTS: dict[str, dict] = {
         "transports": ["http"],
         "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
         "loads": ["low", "medium", "high"],  # 2, 5, 10 pps
-        # 5 strategies x 3 pipelines x 3 loads x 5 seeds = 225 runs
+        # 6 strategies x 3 pipelines x 3 loads x 5 seeds = 270 runs
         "notes": (
             "4-domain O-RAN topology: DU (VM1) + CU/near-RT-RIC (VM2) = edge site; "
             "non-RT-RIC (VM3) + SMO (VM4) = cloud site. 1 WAN link (50ms) between sites. "
@@ -120,12 +121,79 @@ EXPERIMENTS: dict[str, dict] = {
         "transports": ["http"],
         # 12 configs x 5 seeds = 60
     },
+    "ablation": {
+        "description": "Stress scenarios where rr-global breaks down",
+        "configs": ["failure", "sat-20", "sat-25", "sat-30", "heterogeneous"],
+        "seeds": DEFAULT_SEEDS,
+        "transports": ["http"],
+        "strategies": ["oracle-global", "rr-global", "market-quad"],
+        "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
+        # 5 scenarios x 3 strategies x 3 pipelines x 5 seeds = 225
+        "notes": (
+            "Tier 2c ablation. Tests H-RR-RECOVER (worker failure), "
+            "H-RR-SATURATE (saturation rate sweep 20/25/30 pps), "
+            "H-RR-HETERO (edge 2x slower / cloud 1.5x faster). Uses "
+            "docker-compose.vm-ablation.yaml and src.worker.ablation_worker "
+            "(re-export of src.worker.worker) so the main campaign "
+            "infrastructure is unchanged. Broker runs with "
+            "--market-load-aware flag (BrokerConfig.market_load_aware=True)."
+        ),
+    },
 }
 
 
 # ---------------------------------------------------------------------------
 # Legacy name mapping (old letter names -> new descriptive names)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Manuscript hypothesis -> experiment mapping (IEEE TNSE)
+# ---------------------------------------------------------------------------
+
+HYPOTHESIS_MAP: dict[str, dict] = {
+    # Tier 1 (confirmed)
+    "H-OVERHEAD": {"phase": "baseline", "configs": ["rr", "random", "neural"], "status": "confirmed"},
+    "H-TRANSPORT": {"phase": "slicing", "test": "ANOVA placement x transport", "status": "confirmed"},
+    "H-SLICE": {"phase": "slicing", "configs": ["flat", "neural"], "status": "confirmed"},
+    "H-GOV": {"phase": "slicing", "configs": ["neural", "gov"], "status": "confirmed"},
+    # Tier 2a — Market allocation
+    "H-NEAR": {"phase": "market", "configs": ["oracle-global", "market-quad"]},
+    "H-EDGE": {"phase": "market", "filter": "pipelines in [cqi-chain, anomaly-sp]"},
+    "H-ENTANGLE": {"phase": "market", "filter": "pipeline = ran-entangled"},
+    "H-OVERLOAD": {"phase": "market", "configs": ["oracle-global", "market-quad"], "test": "Delta_eff vs load"},
+    "H-HEURISTIC": {"phase": "market", "configs": ["market-quad", "locality-only", "latency-greedy", "spillover"]},
+    "H-ADAPT": {"phase": "market", "test": "load step 5->10 pps at t=5min"},
+    # Tier 2b — Governance + resilience
+    "H-COMPOSE": {"phase": "governance", "configs": ["gov-none", "gov-edge-only", "gov-cloud-only", "gov-both"]},
+    "H-FEDERATION": {"phase": "federation", "configs": ["neural", "gov", "broker-kill"]},
+    "H-RESILIENCE": {"phase": "resilience", "configs": ["embb-kill", "urllc-kill"]},
+    # Tier 2c — Ablation: rr-global stress scenarios
+    # For ablation phase, "configs" refers to the scenarios axis (matching
+    # EXPERIMENTS["ablation"]["configs"]), and "strategies" lists the
+    # strategies compared within each scenario.
+    "H-RR-RECOVER": {
+        "phase": "ablation",
+        "configs": ["failure"],
+        "strategies": ["oracle-global", "rr-global", "market-quad"],
+        "test": "worker kill at t=90s, measure CR drop per strategy",
+        "theory": "Information completeness: prices encode worker availability",
+    },
+    "H-RR-SATURATE": {
+        "phase": "ablation",
+        "configs": ["sat-20", "sat-25", "sat-30"],
+        "strategies": ["oracle-global", "rr-global", "market-quad"],
+        "test": "rate sweep 20/25/30 pps, measure tail latency divergence",
+        "theory": "Walrasian admission control: prices clear excess demand",
+    },
+    "H-RR-HETERO": {
+        "phase": "ablation",
+        "configs": ["heterogeneous"],
+        "strategies": ["oracle-global", "rr-global", "market-quad"],
+        "test": "edge 2x slower / cloud 1.5x faster, mean latency gap",
+        "theory": "Walrasian price discovery: scarce workers become expensive",
+    },
+}
+
 
 LEGACY_MAP: dict[str, str] = {
     "A": "baseline",
