@@ -20,7 +20,12 @@ Three strategies (oracle-global, rr-global, market-quad) x five scenarios
 x three pipelines (cqi-chain, anomaly-sp, ran-entangled) x five seeds
 = 225 runs.
 
-Run length: 60 s warmup + 180 s measurement = 4 min/run -> ~15 hours total.
+Run length: identical to the main market campaign (warmup + measurement
+inherited from EXPERIMENTS["ablation"] in scripts.experiment_matrix, which
+references the same constants as EXPERIMENTS["market"]). At the current
+240 s + 600 s = 14 min/run setting, the ablation phase takes ~54 hours
+on the 4-VM cluster. Identical timing is required so that CR / latency /
+p95 distributions are directly comparable to the main campaign data.
 
 Uses a separate compose file (deploy/docker-compose.vm-ablation.yaml) and
 worker module (src.worker.ablation_worker) to avoid touching the main
@@ -42,11 +47,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scripts._common import DEFAULT_SEEDS, PROJECT_ROOT, phase_main
+from scripts.experiment_matrix import EXPERIMENTS
 
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "ablation"
 COMPOSE_FILE = "deploy/docker-compose.vm-ablation.yaml"
+
+# Run timing inherited from the experiment matrix SSoT. EXPERIMENTS["ablation"]
+# explicitly references the same constants as EXPERIMENTS["market"] so that
+# ablation data is directly comparable to the main market campaign.
+_ABLATION_META = EXPERIMENTS["ablation"]
+_WARMUP_S = _ABLATION_META["warmup_s"]
+_MEASUREMENT_S = _ABLATION_META["measurement_s"]
+# Failure injection occurs halfway through the measurement window so that
+# both pre- and post-failure observation are equal length, regardless of
+# how the run length is rescaled in experiment_matrix.py.
+_FAILURE_DELAY_S = _MEASUREMENT_S // 2
 
 # ---------------------------------------------------------------------------
 # Strategies (subset of run_market.py MARKET_CONFIGS)
@@ -84,33 +101,38 @@ PIPELINE_MAP: dict[str, str] = {
 }
 PIPELINE_SLUGS = list(PIPELINE_MAP)
 
+# Scenario timing values (warmup_s, measurement_s, failure_delay_s) are
+# inherited from EXPERIMENTS["ablation"] in scripts.experiment_matrix so
+# rescaling the main campaign automatically rescales the ablation. Each
+# scenario only owns scenario-specific parameters (arrival rate, failure
+# target, speed factors).
 SCENARIOS: dict[str, dict] = {
     "failure": {
         "description": "Worker kill on VM2 mid-run",
         "arrival_rate": 5.0,
         "failure_target": "deploy-worker-0-1",
         "failure_vm_index": 1,        # VM2 (eMBB workers)
-        "failure_delay_s": 90,         # 90 s into measurement
-        "warmup_s": 60,
-        "measurement_s": 180,
+        "failure_delay_s": _FAILURE_DELAY_S,  # halfway through measurement
+        "warmup_s": _WARMUP_S,
+        "measurement_s": _MEASUREMENT_S,
     },
     "sat-20": {
         "description": "Pre-saturation arrival rate (20 pps)",
         "arrival_rate": 20.0,
-        "warmup_s": 60,
-        "measurement_s": 180,
+        "warmup_s": _WARMUP_S,
+        "measurement_s": _MEASUREMENT_S,
     },
     "sat-25": {
         "description": "At-saturation arrival rate (25 pps)",
         "arrival_rate": 25.0,
-        "warmup_s": 60,
-        "measurement_s": 180,
+        "warmup_s": _WARMUP_S,
+        "measurement_s": _MEASUREMENT_S,
     },
     "sat-30": {
         "description": "Above-saturation arrival rate (30 pps)",
         "arrival_rate": 30.0,
-        "warmup_s": 60,
-        "measurement_s": 180,
+        "warmup_s": _WARMUP_S,
+        "measurement_s": _MEASUREMENT_S,
     },
     "heterogeneous": {
         "description": "Edge VMs 2x slower; cloud VMs 1.5x faster",
@@ -121,8 +143,8 @@ SCENARIOS: dict[str, dict] = {
             "vm3": 0.67,   # cloud: fast
             "vm4": 0.67,   # cloud: fast
         },
-        "warmup_s": 60,
-        "measurement_s": 180,
+        "warmup_s": _WARMUP_S,
+        "measurement_s": _MEASUREMENT_S,
     },
 }
 

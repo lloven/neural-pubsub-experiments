@@ -137,6 +137,83 @@ class TestRunAblationPhase:
         # Edge VMs slower (>1.0 multiplier means slower), cloud faster (<1.0)
         assert sf["vm1"] != sf["vm3"], "edge and cloud must differ"
 
+    def test_ablation_run_length_inherits_from_experiment_matrix(self):
+        """Ablation must inherit warmup_s/measurement_s from the SSoT in
+        scripts.experiment_matrix, not hardcode them.
+
+        The values must be equal to EXPERIMENTS["market"] so that ablation
+        data is directly comparable to the main market campaign data
+        (same statistical window, same warmup convergence, same p95
+        sample basis).
+        """
+        from scripts.experiment_matrix import EXPERIMENTS
+        market_w = EXPERIMENTS["market"]["warmup_s"]
+        market_m = EXPERIMENTS["market"]["measurement_s"]
+        abl_w = EXPERIMENTS["ablation"]["warmup_s"]
+        abl_m = EXPERIMENTS["ablation"]["measurement_s"]
+        assert abl_w == market_w, (
+            f"EXPERIMENTS['ablation']['warmup_s']={abl_w} must equal "
+            f"EXPERIMENTS['market']['warmup_s']={market_w}"
+        )
+        assert abl_m == market_m, (
+            f"EXPERIMENTS['ablation']['measurement_s']={abl_m} must equal "
+            f"EXPERIMENTS['market']['measurement_s']={market_m}"
+        )
+
+    def test_all_scenarios_use_matrix_run_length(self):
+        """SCENARIOS dict in run_ablation.py must read warmup/measurement
+        from EXPERIMENTS["ablation"] so a single edit to the SSoT
+        rescales every scenario at once.
+        """
+        from scripts.experiment_matrix import EXPERIMENTS
+        from scripts.run_ablation import SCENARIOS
+        expected_w = EXPERIMENTS["ablation"]["warmup_s"]
+        expected_m = EXPERIMENTS["ablation"]["measurement_s"]
+        for name, cfg in SCENARIOS.items():
+            assert cfg["warmup_s"] == expected_w, (
+                f"scenario {name!r} warmup_s={cfg['warmup_s']} != "
+                f"EXPERIMENTS['ablation']['warmup_s']={expected_w}"
+            )
+            assert cfg["measurement_s"] == expected_m, (
+                f"scenario {name!r} measurement_s={cfg['measurement_s']} != "
+                f"EXPERIMENTS['ablation']['measurement_s']={expected_m}"
+            )
+
+    def test_market_run_config_default_inherits_from_matrix(self):
+        """MarketRunConfig defaults must come from EXPERIMENTS["market"]
+        in scripts.experiment_matrix, not from hardcoded literals.
+        """
+        from scripts.experiment_matrix import EXPERIMENTS
+        from scripts.run_market import MarketRunConfig
+        cfg = MarketRunConfig(
+            config_name="dummy",
+            pipeline_type="cqi_chain",
+            load_label="medium",
+            arrival_rate=5.0,
+            seed=42,
+        )
+        assert cfg.warmup_s == EXPERIMENTS["market"]["warmup_s"]
+        assert cfg.measurement_s == EXPERIMENTS["market"]["measurement_s"]
+
+    def test_failure_injection_delay_halfway_through_measurement(self):
+        """Failure scenario must inject failure at measurement_s // 2 so
+        that pre- and post-failure observation windows are both at least
+        long enough to characterise the failure transient. The delay
+        is computed from measurement_s rather than hardcoded so the
+        ratio is preserved when the run length is rescaled.
+        """
+        from scripts.run_ablation import SCENARIOS
+        scen = SCENARIOS["failure"]
+        delay = scen["failure_delay_s"]
+        meas = scen["measurement_s"]
+        assert delay == meas // 2, (
+            f"failure_delay_s={delay} must equal measurement_s//2={meas // 2}"
+        )
+        # Post-failure window must be at least 2 minutes
+        assert meas - delay >= 120, (
+            f"post-failure window {meas - delay}s < 120s is too short"
+        )
+
 
 class TestPerVmEnvWiring:
     """per_vm_env propagates correctly through start_cluster."""
