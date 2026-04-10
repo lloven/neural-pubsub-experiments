@@ -61,7 +61,7 @@ The manuscript (IEEE TNSE) uses a different hypothesis naming scheme. This table
 
 **Ablation phase**: Five stress scenarios (failure, sat-20, sat-25, sat-30, heterogeneous) test the round-robin baseline's failure modes by isolating distinct Walrasian mechanisms (information completeness, admission control, price discovery). The saturation scenario is a 3-rate sweep around the empirically derived 25 pps inflection point so the rate dependence (not a single anecdotal datapoint) is characterised. The main allocation experiments use uniform conditions where rr-global is structurally hard to beat; the ablation introduces conditions that expose its limitations. Uses a separate compose file (`docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of the main worker) so the main campaign infrastructure is not modified during ablation runs. The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement`. The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection).
 
-**Total Tier 2 runs**: 590 (270 allocation + 60 governance + 15 federation + 20 resilience + 225 ablation) = ~100 hours.
+**Total Tier 2 runs**: 590 (270 allocation + 60 governance + 15 federation + 20 resilience + 225 ablation) = ~103 hours (market+governance ~80h at 14m/run measured, federation+resilience ~7h at 12m/run, ablation ~16h at 4m/run).
 
 ## 3. Experimental Variables
 
