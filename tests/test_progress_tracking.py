@@ -202,14 +202,59 @@ class TestResumeRecovery:
         assert "summary" not in completed  # skip
 
     def test_discover_completed_runs_finds_distributed_dirs(self, tmp_path):
+        """A distributed run is complete iff it has BOTH a vm*/ subdir
+        (post-run rsync from worker VMs) AND a sibling .csv (workload's
+        primary output). The .csv is the canonical "did this run finish"
+        marker; the vm*/ dirs are auxiliary broker/federation logs.
+        """
         from scripts._common import _discover_completed_runs
 
         results_dir = tmp_path / "baseline"
         results_dir.mkdir()
         (results_dir / "run_dist" / "vm1").mkdir(parents=True)
+        (results_dir / "run_dist.csv").write_text("header\nrow1\n")
 
         completed = _discover_completed_runs(results_dir)
         assert "run_dist" in completed
+
+    def test_discover_completed_runs_skips_phantom_dirs(self, tmp_path):
+        """A directory with vm*/ children but NO sibling .csv is a phantom
+        (an aborted run where rsync of broker/federation state from worker
+        VMs partially succeeded but the workload never wrote its .csv).
+        Such directories must NOT be marked as done, otherwise --resume
+        will skip the affected runs forever.
+
+        This was the root cause of the oracle-global anomaly-sp re-run
+        bug: 26 phantom directories were re-marked done at every --resume.
+        """
+        from scripts._common import _discover_completed_runs
+
+        results_dir = tmp_path / "market"
+        results_dir.mkdir()
+        # Phantom: only VM3's federation rsync survived; no .csv from workload
+        (results_dir / "phantom_run" / "vm3" / "federation").mkdir(parents=True)
+        (results_dir / "phantom_run" / "vm3" / "federation" / ".progress.json").write_text("{}")
+
+        completed = _discover_completed_runs(results_dir)
+        assert "phantom_run" not in completed, (
+            "phantom_run has vm3/ rsync residue but no .csv; must not be "
+            "marked as done"
+        )
+
+    def test_discover_completed_runs_skips_dir_with_only_old_csv(self, tmp_path):
+        """A directory whose sibling .csv was renamed to .csv.old (after a
+        bug fix invalidated the data) is NOT done. The .csv must exist as
+        the canonical name, not as .csv.old.
+        """
+        from scripts._common import _discover_completed_runs
+
+        results_dir = tmp_path / "market"
+        results_dir.mkdir()
+        (results_dir / "invalidated_run" / "vm1").mkdir(parents=True)
+        (results_dir / "invalidated_run.csv.old").write_text("header\nrow1\n")
+
+        completed = _discover_completed_runs(results_dir)
+        assert "invalidated_run" not in completed
 
 
 # ---------------------------------------------------------------------------
