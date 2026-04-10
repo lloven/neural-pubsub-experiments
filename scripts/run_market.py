@@ -25,10 +25,16 @@ from scripts._common import (
     PROJECT_ROOT,
     phase_main,
 )
+from scripts.experiment_matrix import EXPERIMENTS
 
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = PROJECT_ROOT / "results" / "market"
+
+# Run timing inherited from the experiment matrix SSoT.
+_MARKET_META = EXPERIMENTS["market"]
+DEFAULT_WARMUP_S = _MARKET_META["warmup_s"]
+DEFAULT_MEASUREMENT_S = _MARKET_META["measurement_s"]
 
 # ---------------------------------------------------------------------------
 # Pipeline and load mappings
@@ -137,8 +143,8 @@ class MarketRunConfig:
     load_label: str  # "low", "medium", "high"
     arrival_rate: float
     seed: int
-    warmup_s: int = 240
-    measurement_s: int = 600
+    warmup_s: int = DEFAULT_WARMUP_S
+    measurement_s: int = DEFAULT_MEASUREMENT_S
 
     @property
     def run_id(self) -> str:

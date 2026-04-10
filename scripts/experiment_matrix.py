@@ -20,6 +20,22 @@ from __future__ import annotations
 from scripts._common import DEFAULT_SEEDS, EXTENDED_SEEDS, TRANSPORTS
 
 # ---------------------------------------------------------------------------
+# Run timing (single source of truth, consumed by run_market and run_ablation)
+# ---------------------------------------------------------------------------
+#
+# Main-campaign run length: 4 min warmup + 10 min measurement = 14 min/run.
+# Used by all market-class phases (market, governance, ablation). The longer
+# warmup is needed because the 4-domain 48-worker topology with 8-stage
+# pipelines takes ~3 min to reach steady state. The ablation phase MUST use
+# the same values so its CR / latency / p95 distributions are directly
+# comparable to the main campaign data (same statistical window, same
+# warmup convergence, same sample basis).
+#
+# To rescale all market-class phases at once, edit these two constants.
+MAIN_CAMPAIGN_WARMUP_S = 240
+MAIN_CAMPAIGN_MEASUREMENT_S = 600
+
+# ---------------------------------------------------------------------------
 # Experiment definitions (new descriptive names are the primary keys)
 # ---------------------------------------------------------------------------
 
@@ -81,6 +97,8 @@ EXPERIMENTS: dict[str, dict] = {
         "transports": ["http"],
         "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
         "loads": ["low", "medium", "high"],  # 2, 5, 10 pps
+        "warmup_s": MAIN_CAMPAIGN_WARMUP_S,
+        "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
         # 6 strategies x 3 pipelines x 3 loads x 5 seeds = 270 runs
         "notes": (
             "4-domain O-RAN topology: DU (VM1) + CU/near-RT-RIC (VM2) = edge site; "
@@ -100,6 +118,8 @@ EXPERIMENTS: dict[str, dict] = {
         "transports": ["http"],
         "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
         "loads": ["medium"],  # 5 pps only (sufficient for composition test)
+        "warmup_s": MAIN_CAMPAIGN_WARMUP_S,
+        "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
         # 4 scenarios x 3 pipelines x 1 load x 5 seeds = 60 runs
         "notes": (
             "Tests TEAC supermodularity prediction: partial governance is worse than "
@@ -128,6 +148,12 @@ EXPERIMENTS: dict[str, dict] = {
         "transports": ["http"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
         "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
+        # Ablation MUST use the main campaign's run length (not a shorter
+        # window) so that CR / latency / p95 are directly comparable across
+        # the two phases. The two values below intentionally reference the
+        # same constants as EXPERIMENTS["market"]; do not override.
+        "warmup_s": MAIN_CAMPAIGN_WARMUP_S,
+        "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
         # 5 scenarios x 3 strategies x 3 pipelines x 5 seeds = 225
         "notes": (
             "Tier 2c ablation. Tests H-RR-RECOVER (worker failure), "
@@ -136,7 +162,9 @@ EXPERIMENTS: dict[str, dict] = {
             "docker-compose.vm-ablation.yaml and src.worker.ablation_worker "
             "(re-export of src.worker.worker) so the main campaign "
             "infrastructure is unchanged. Broker runs with "
-            "--market-load-aware flag (BrokerConfig.market_load_aware=True)."
+            "--market-load-aware flag (BrokerConfig.market_load_aware=True). "
+            "Run length is identical to the main market campaign for "
+            "direct cross-phase comparability."
         ),
     },
 }
