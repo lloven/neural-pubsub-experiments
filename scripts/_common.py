@@ -616,38 +616,58 @@ def _discover_completed_runs(results_dir: Path) -> dict:
     """Discover completed runs from CSV files and distributed directories on disk.
 
     Used as a fallback when .progress.json is missing or incomplete during
-    --resume. Finds:
-    - {run_id}.csv files (local single-host results)
-    - {run_id}/vm1/ directories (distributed multi-VM results)
+    --resume.
+
+    A run is considered complete iff its primary output CSV exists at
+    ``{results_dir}/{run_id}.csv`` (this is the workload generator's
+    ``--result-file`` target). For distributed runs the rsync from worker
+    VMs creates an auxiliary ``{run_id}/vm*/`` directory tree containing
+    broker/federation state, but those directories are NOT sufficient
+    evidence of completion: an aborted run where the workload never wrote
+    its CSV (e.g. crashed broker, partial rsync) leaves a directory with
+    vm*/ children but no sibling .csv. Such "phantom" directories must
+    NOT be marked done, otherwise ``--resume`` skips the affected runs
+    forever (the original bug behind the 26 missing oracle-global runs).
     """
     completed = {}
     if not results_dir.is_dir():
         return completed
 
+    # First pass: collect all .csv basenames in the results dir.
+    csv_basenames: set[str] = set()
     for entry in results_dir.iterdir():
-        name = entry.stem if entry.is_file() else entry.name
-
-        # Skip partials, summaries, hidden, progress files
-        if name.startswith(".") or name.startswith("_") or "summary" in name:
+        if not entry.is_file() or entry.suffix != ".csv":
             continue
-        if entry.is_file() and ".partial" in entry.name:
+        if ".partial" in entry.name:
             continue
+        if entry.name.startswith(".") or entry.name.startswith("_"):
+            continue
+        if "summary" in entry.name:
+            continue
+        csv_basenames.add(entry.stem)
+        completed[entry.stem] = {
+            "status": "done",
+            "detail": str(entry),
+            "timestamp": "",
+        }
 
-        if entry.is_file() and entry.suffix == ".csv":
-            completed[name] = {
-                "status": "done",
-                "detail": str(entry),
-                "timestamp": "",
-            }
-        elif entry.is_dir():
-            # Check for distributed layout (vm*/ children)
-            vm_children = [c for c in entry.iterdir() if c.is_dir() and c.name.startswith("vm")]
-            if vm_children:
-                completed[entry.name] = {
-                    "status": "done",
-                    "detail": str(entry),
-                    "timestamp": "",
-                }
+    # Second pass: distributed run directories. A directory is "done" only
+    # if its sibling .csv (same stem at the parent level) also exists.
+    for entry in results_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if name.startswith(".") or name.startswith("_"):
+            continue
+        if "summary" in name:
+            continue
+        vm_children = [c for c in entry.iterdir() if c.is_dir() and c.name.startswith("vm")]
+        if not vm_children:
+            continue
+        if name not in csv_basenames:
+            # Phantom: vm*/ rsync residue without a workload .csv.
+            continue
+        # Already added in first pass via the .csv; nothing to do.
 
     return completed
 
