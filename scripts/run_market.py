@@ -5,7 +5,7 @@ Tier 2 experiments on 4-domain O-RAN topology (4 VMs, 48 workers).
 
 Allocation (270 runs): 6 strategies x 3 pipeline types x 3 loads x 5 seeds.
 Governance  (60 runs):  4 scenarios x 3 pipeline types x 1 load  x 5 seeds.
-Total: 330 runs (~73h on 4 VMs).
+Total: 330 runs (~80h on 4 VMs, measured wall clock).
 
 Usage:
     python -m scripts.run_market --dry-run
