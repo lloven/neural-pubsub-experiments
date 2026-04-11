@@ -216,7 +216,7 @@ def _run_distributed(run: MarketRunConfig, dry_run: bool) -> dict:
 
     cfg = CONFIGS[run.config_name]
 
-    multi_vm_runner.run_single(
+    result = multi_vm_runner.run_single(
         config=run.config_name,
         run_id=run.run_id,
         seed=run.seed,
@@ -235,6 +235,9 @@ def _run_distributed(run: MarketRunConfig, dry_run: bool) -> dict:
         oracle_mode=cfg.get("oracle_mode", False),
         dry_run=dry_run,
     )
+    # Propagate failure from run_single (e.g. federation timeout)
+    if result and result.get("status") == "failed":
+        return result
     return {
         "run_id": run.run_id,
         "status": "completed" if not dry_run else "dry_run",
