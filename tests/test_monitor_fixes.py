@@ -391,7 +391,12 @@ def test_monitor_reads_progress_from_distributed_runs(tmp_path):
 
 def test_discover_progress_finds_distributed_run_dirs(tmp_path):
     """Merged progress must detect distributed run directories
-    (subdirs with vm1/vm2/... inside) as completed runs."""
+    (subdirs with vm1/vm2/... inside) as completed runs, but ONLY
+    when a sibling .csv exists (the workload's primary output).
+
+    A directory with vm*/ children but no .csv is a phantom from an
+    aborted run and must NOT be counted. See L50 in Tasks/lessons.md.
+    """
     from scripts.monitor import (
         _discover_progress_from_csvs, _discover_distributed_runs, merge_progress,
     )
@@ -399,13 +404,17 @@ def test_discover_progress_finds_distributed_run_dirs(tmp_path):
     phase_dir = tmp_path / "baseline"
     phase_dir.mkdir()
 
-    # Simulate 3 completed distributed runs (each has vm1/ subdir)
+    # Simulate 3 completed distributed runs (each has vm1/ subdir + sibling .csv)
     for run_name in ["rr_seed-42", "rr_seed-123", "neural_seed-42"]:
         run_dir = phase_dir / run_name / "vm1"
         run_dir.mkdir(parents=True)
+        (phase_dir / f"{run_name}.csv").write_text("header\nrow1\n")
 
-    # One old-style direct CSV
+    # One old-style direct CSV (no vm*/ dir)
     (phase_dir / "old_run.csv").write_text("header\nrow1\n")
+
+    # One phantom dir (vm3/ rsync residue, no .csv) — must NOT be found
+    (phase_dir / "phantom" / "vm3").mkdir(parents=True)
 
     progress = merge_progress(
         _discover_progress_from_csvs(phase_dir),
@@ -413,23 +422,27 @@ def test_discover_progress_finds_distributed_run_dirs(tmp_path):
     )
 
     assert "old_run" in progress, "Should find direct CSV"
-    assert "rr_seed-42" in progress, "Should find distributed run dir"
-    assert "rr_seed-123" in progress, "Should find distributed run dir"
-    assert "neural_seed-42" in progress, "Should find distributed run dir"
+    assert "rr_seed-42" in progress, "Should find distributed run with .csv"
+    assert "rr_seed-123" in progress, "Should find distributed run with .csv"
+    assert "neural_seed-42" in progress, "Should find distributed run with .csv"
+    assert "phantom" not in progress, "Phantom dir (no .csv) must NOT be found"
     assert len(progress) == 4
     assert all(v["status"] == "done" for v in progress.values())
 
 
 def test_phase_summary_counts_distributed_runs(tmp_path):
-    """phase_summary must count distributed run directories as done runs."""
+    """phase_summary must count distributed run directories as done runs,
+    but ONLY when a sibling .csv exists (the workload's primary output).
+    """
     from scripts.monitor import phase_summary
 
     phase_dir = tmp_path / "baseline"
     phase_dir.mkdir()
 
-    # 3 completed distributed runs + empty .progress.json
+    # 3 completed distributed runs (vm1/ dir + sibling .csv)
     for run_name in ["run_a", "run_b", "run_c"]:
         (phase_dir / run_name / "vm1").mkdir(parents=True)
+        (phase_dir / f"{run_name}.csv").write_text("header\nrow1\n")
 
     summary = phase_summary(phase_dir)
     assert summary["done"] == 3

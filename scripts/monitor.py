@@ -35,7 +35,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # Directories to skip when discovering phase subdirectories in results/.
-_SKIP_DIRS = {"analysis", "local", "test_cleanup", "test_signal"}
+_SKIP_DIRS = {
+    "analysis", "local", "test_cleanup", "test_signal",
+    # Legacy phase names (pre-rename). Their data is archived under the
+    # canonical names (federation, resilience, etc.) or in _archive/.
+    "phase_a", "phase_b", "phase_c", "phase_d", "phase_e",
+}
 
 
 def format_time(seconds: float) -> str:
@@ -104,21 +109,28 @@ def _discover_progress_from_csvs(
 def _discover_distributed_runs(
     results_dir: Path, remote_host: str | None = None,
 ) -> dict:
-    """Detect completed distributed runs by finding subdirs with vm*/ children."""
+    """Detect completed distributed runs by finding subdirs with vm*/ children.
+
+    A distributed run is complete iff it has BOTH a vm*/ subdir AND a
+    sibling .csv at ``{results_dir}/{run_id}.csv``. A directory with
+    vm*/ children but no .csv is a phantom from an aborted run (partial
+    rsync) and must NOT be counted. See L50/L51 in Tasks/lessons.md.
+    """
     progress = {}
     if remote_host:
         try:
+            # Find dirs with vm*/ children, then filter to those with sibling .csv
             result = subprocess.run(
-                ["ssh", remote_host, f"ls -d {results_dir}/*/vm1/ 2>/dev/null"],
+                ["ssh", remote_host,
+                 f"for d in {results_dir}/*/vm1/; do "
+                 f"  rid=$(basename $(dirname \"$d\")); "
+                 f"  [ -f \"{results_dir}/$rid.csv\" ] && echo \"$rid\"; "
+                 f"done 2>/dev/null"],
                 capture_output=True, text=True, timeout=10,
             )
             for line in result.stdout.strip().splitlines():
-                if not line.strip():
-                    continue
-                # /path/to/results/baseline/run_id/vm1/ → run_id
-                parts = line.rstrip("/").split("/")
-                if len(parts) >= 2:
-                    run_id = parts[-2]
+                run_id = line.strip()
+                if run_id:
                     progress[run_id] = {"status": "done", "timestamp": ""}
         except Exception:
             pass
@@ -126,13 +138,25 @@ def _discover_distributed_runs(
 
     if not results_dir.is_dir():
         return {}
+
+    # Collect .csv basenames first (same approach as _common.py fix)
+    csv_basenames: set[str] = set()
+    for f in results_dir.iterdir():
+        if f.is_file() and f.suffix == ".csv" and ".partial" not in f.name:
+            if not f.name.startswith(".") and "summary" not in f.name:
+                csv_basenames.add(f.stem)
+
     for entry in results_dir.iterdir():
         if not entry.is_dir() or entry.name.startswith(".") or entry.name.startswith("_"):
             continue
         # Check if this dir has vm*/ children (distributed result layout)
         vm_children = [c for c in entry.iterdir() if c.is_dir() and c.name.startswith("vm")]
-        if vm_children:
-            progress[entry.name] = {"status": "done", "timestamp": ""}
+        if not vm_children:
+            continue
+        # Require sibling .csv to exist (phantom dirs don't have one)
+        if entry.name not in csv_basenames:
+            continue
+        progress[entry.name] = {"status": "done", "timestamp": ""}
     return progress
 
 
