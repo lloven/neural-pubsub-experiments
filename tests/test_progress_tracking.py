@@ -140,10 +140,15 @@ class TestMergeProgress:
         phase_dir = tmp_path / "baseline"
         phase_dir.mkdir()
 
-        # Distributed run dirs (contain vm1/)
+        # Distributed run dirs (contain vm1/) WITH sibling .csv
         (phase_dir / "run_a" / "vm1").mkdir(parents=True)
+        (phase_dir / "run_a.csv").write_text("header\nrow1\n")
         (phase_dir / "run_b" / "vm1").mkdir(parents=True)
         (phase_dir / "run_b" / "vm2").mkdir(parents=True)
+        (phase_dir / "run_b.csv").write_text("header\nrow1\n")
+
+        # Phantom dir (vm1/ but no sibling .csv)
+        (phase_dir / "phantom" / "vm1").mkdir(parents=True)
 
         # Non-distributed dir (no vm* child)
         (phase_dir / "some_other_dir").mkdir()
@@ -154,11 +159,14 @@ class TestMergeProgress:
         result = _discover_distributed_runs(phase_dir)
         assert "run_a" in result
         assert "run_b" in result
+        assert "phantom" not in result, "Phantom dir (no .csv) must not be found"
         assert "some_other_dir" not in result
         assert result["run_a"]["status"] == "done"
 
     def test_phase_summary_merges_all_sources(self, tmp_path):
-        """phase_summary should find runs from .progress.json AND distributed dirs."""
+        """phase_summary should find runs from .progress.json AND distributed dirs
+        (but only distributed dirs with a sibling .csv).
+        """
         from scripts.monitor import phase_summary
 
         phase_dir = tmp_path / "baseline"
@@ -168,9 +176,11 @@ class TestMergeProgress:
         progress = {"run_tracked": {"status": "running", "timestamp": datetime.now().isoformat()}}
         (phase_dir / ".progress.json").write_text(json.dumps(progress))
 
-        # 2 completed distributed run dirs
+        # 2 completed distributed run dirs (vm1/ + sibling .csv)
         (phase_dir / "run_dist_a" / "vm1").mkdir(parents=True)
+        (phase_dir / "run_dist_a.csv").write_text("header\nrow1\n")
         (phase_dir / "run_dist_b" / "vm1").mkdir(parents=True)
+        (phase_dir / "run_dist_b.csv").write_text("header\nrow1\n")
 
         summary = phase_summary(phase_dir)
         assert summary["total"] == 3
