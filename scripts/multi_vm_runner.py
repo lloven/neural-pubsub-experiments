@@ -554,7 +554,7 @@ def run_single(
     if not wait_for_federation(oracle_mode=oracle_mode, dry_run=dry_run):
         logger.error("Federation failed, skipping run %s", run_id)
         stop_cluster(compose_file=compose_file, dry_run=dry_run)
-        return
+        return {"run_id": run_id, "status": "failed", "error": "federation_timeout"}
 
     # 4. Start failure injection if configured (runs in background thread)
     if failure_fn and not dry_run:
@@ -598,6 +598,7 @@ def run_single(
     stop_cluster(compose_file=compose_file, dry_run=dry_run)
 
     logger.info("=== Completed: %s ===", run_id)
+    return {"run_id": run_id, "status": "completed"}
 
 # ---------------------------------------------------------------------------
 # Config → placement/governance mapping

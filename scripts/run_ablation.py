@@ -224,7 +224,7 @@ def _run_distributed(run: AblationRunConfig, dry_run: bool) -> dict:
             for vm, speed in scenario["speed_factors"].items()
         }
 
-    multi_vm_runner.run_single(
+    result = multi_vm_runner.run_single(
         config=f"{run.scenario_name}_{run.strategy}",
         run_id=run.run_id,
         seed=run.seed,
@@ -246,6 +246,9 @@ def _run_distributed(run: AblationRunConfig, dry_run: bool) -> dict:
         oracle_mode=strat_cfg.get("oracle_mode", False),
         dry_run=dry_run,
     )
+    # Propagate failure from run_single (e.g. federation timeout)
+    if result and result.get("status") == "failed":
+        return result
     return {
         "run_id": run.run_id,
         "status": "completed" if not dry_run else "dry_run",
