@@ -601,10 +601,11 @@ NEVER use `nohup` from a pomerium SSH session — the process may survive but tm
 
 ### Pre-flight checklist (MUST execute before every campaign launch)
 
-Run this checklist before Step 8. Every item must pass. If any fails, STOP and fix before launching. References: L23 (multi-level smoke), L30 (validate content), L31 (TDD), L32 (smoke on target), L38 (verify treatment), L39 (no silent errors), L47 (follow protocol).
+Run this checklist before Step 8. Every item must pass. If any fails, STOP and fix before launching. References: L23 (multi-level smoke), L30 (validate content), L31 (TDD), L32 (smoke on target), L38 (verify treatment), L39 (no silent errors), L47 (follow protocol), L50 (rebuild images after deploy), L51 (propagate run_single failures).
 
 - [ ] **L31 — Tests pass locally**: `pytest tests/ -x --ignore=tests/test_system.py` — 0 failures. New tests written for any code changes.
 - [ ] **Code deployed**: `deploy_code()` completed for all VMs, no errors
+- [ ] **L50 — Docker images rebuilt**: If code changes affect modules running inside containers (broker, worker, workload), rebuild on all VMs: `docker build -t neural-pubsub:latest .`. Verify with a feature check: `docker run --rm --entrypoint python neural-pubsub:latest -c "from src.broker.neural_broker import BrokerConfig; print(BrokerConfig.__dataclass_fields__.keys())"`. deploy_code() rsyncs source but does NOT rebuild images.
 - [ ] **VM1 config intact**: `ssh 5gtn-npubsub "cat ~/neural-pubsub/scripts/multi_vm_config_local.py"` shows `lloven@193.166.32.x` for VM2-4 (NOT pomerium aliases)
 - [ ] **VM1→VM2 SSH works**: `ssh 5gtn-npubsub "ssh -o ConnectTimeout=5 lloven@193.166.32.50 hostname"` returns `5gtn50`
 - [ ] **Dry-run correct**: `--dry-run` on VM1 shows correct compose commands, oracle mode for oracle/rr-global
