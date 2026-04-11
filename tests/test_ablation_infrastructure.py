@@ -337,3 +337,94 @@ class TestFailureInjectionWiring:
             _run_distributed(run, dry_run=True)
             _, kwargs = mock_run.call_args
             assert kwargs["compose_file"] == "deploy/docker-compose.vm-ablation.yaml"
+
+
+class TestFailurePropagation:
+    """L51: _run_distributed must propagate run_single failure status.
+
+    When run_single returns {"status": "failed"} (e.g. federation timeout
+    due to stale Docker image), _run_distributed must NOT unconditionally
+    return "completed". The silent-success bug (225 runs "successful" with
+    0 CSVs, commit 79718c7) was caused by ignoring run_single's return.
+    """
+
+    def test_ablation_propagates_federation_failure(self):
+        from unittest.mock import patch
+        from scripts.run_ablation import _run_distributed, AblationRunConfig
+
+        with patch("scripts.multi_vm_runner.run_single") as mock_run:
+            mock_run.return_value = {
+                "run_id": "test", "status": "failed",
+                "error": "federation_timeout",
+            }
+            run = AblationRunConfig(
+                scenario_name="sat-25",
+                strategy="oracle-global",
+                pipeline_type="cqi_chain",
+                seed=42,
+                arrival_rate=25.0,
+                warmup_s=240,
+                measurement_s=600,
+            )
+            result = _run_distributed(run, dry_run=False)
+            assert result["status"] == "failed", (
+                "L51: _run_distributed must propagate run_single failure, "
+                f"got status={result['status']!r}"
+            )
+
+    def test_ablation_returns_completed_on_success(self):
+        from unittest.mock import patch
+        from scripts.run_ablation import _run_distributed, AblationRunConfig
+
+        with patch("scripts.multi_vm_runner.run_single") as mock_run:
+            mock_run.return_value = {"run_id": "test", "status": "completed"}
+            run = AblationRunConfig(
+                scenario_name="sat-25",
+                strategy="oracle-global",
+                pipeline_type="cqi_chain",
+                seed=42,
+                arrival_rate=25.0,
+                warmup_s=240,
+                measurement_s=600,
+            )
+            result = _run_distributed(run, dry_run=False)
+            assert result["status"] == "completed"
+
+    def test_ablation_returns_dry_run_on_dry_run(self):
+        from unittest.mock import patch
+        from scripts.run_ablation import _run_distributed, AblationRunConfig
+
+        with patch("scripts.multi_vm_runner.run_single") as mock_run:
+            mock_run.return_value = None  # dry-run returns None
+            run = AblationRunConfig(
+                scenario_name="sat-25",
+                strategy="oracle-global",
+                pipeline_type="cqi_chain",
+                seed=42,
+                arrival_rate=25.0,
+                warmup_s=240,
+                measurement_s=600,
+            )
+            result = _run_distributed(run, dry_run=True)
+            assert result["status"] == "dry_run"
+
+    def test_market_propagates_federation_failure(self):
+        from unittest.mock import patch
+        from scripts.run_market import _run_distributed, MarketRunConfig
+
+        with patch("scripts.multi_vm_runner.run_single") as mock_run:
+            mock_run.return_value = {
+                "run_id": "test", "status": "failed",
+                "error": "federation_timeout",
+            }
+            run = MarketRunConfig(
+                config_name="oracle-global",
+                pipeline_type="cqi_chain",
+                load_label="medium",
+                arrival_rate=5.0,
+                seed=42,
+            )
+            result = _run_distributed(run, dry_run=False)
+            assert result["status"] == "failed", (
+                "L51: market _run_distributed must propagate run_single failure"
+            )
