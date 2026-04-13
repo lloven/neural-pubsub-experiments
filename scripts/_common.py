@@ -580,6 +580,24 @@ def _progress_file(results_dir: Path) -> Path:
     return results_dir / ".progress.json"
 
 
+def _write_summary_csv(summary_file: Path, results: list[dict]) -> None:
+    """Write a summary CSV from result dicts, ignoring extra fields.
+
+    The standard fieldnames are ``run_id``, ``status``, ``result_file``.
+    Result dicts may contain additional keys (e.g. ``error`` from the L51
+    failure-propagation fix) which are silently dropped via
+    ``extrasaction='ignore'``.
+    """
+    with open(summary_file, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["run_id", "status", "result_file"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(results)
+
+
 def _load_progress(results_dir: Path) -> dict:
     """Load existing progress, or return empty dict."""
     pf = _progress_file(results_dir)
@@ -858,8 +876,5 @@ def phase_main(
     )
 
     summary_file = results_dir / f"{phase_name.lower().replace(' ', '_')}_summary.csv"
-    with open(summary_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["run_id", "status", "result_file"])
-        writer.writeheader()
-        writer.writerows(results)
+    _write_summary_csv(summary_file, results)
     logger.info("Summary written to %s", summary_file)

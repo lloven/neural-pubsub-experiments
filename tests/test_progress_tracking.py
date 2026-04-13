@@ -347,3 +347,40 @@ class TestRobustEta:
         assert summary["eta_s"] < 3600, (
             f"ETA {summary['eta_s']}s is too high — stale timestamp not filtered"
         )
+
+
+# ---------------------------------------------------------------------------
+# T8: Summary CSV writer handles extra fields (L51 failure dict)
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryCsvWriter:
+    """Summary CSV must not crash when result dicts contain extra fields.
+
+    The L51 fix (commit 79718c7) added an 'error' key to the failure
+    dict from run_single. The summary CSV writer in _common.py:862 used
+    csv.DictWriter with fieldnames=["run_id", "status", "result_file"],
+    which raises ValueError on the unexpected 'error' key. This crashed
+    the campaign after all 225 runs completed (75 failed rr-global +
+    150 successful oracle/market), losing the summary.
+    """
+
+    def test_summary_csv_with_extra_fields(self, tmp_path):
+        """DictWriter must tolerate extra keys (e.g. 'error') in result dicts."""
+        import csv
+        from scripts._common import _write_summary_csv
+
+        results = [
+            {"run_id": "run_a", "status": "completed", "result_file": "a.csv"},
+            {"run_id": "run_b", "status": "failed", "result_file": "b.csv",
+             "error": "federation_timeout"},
+        ]
+        summary_file = tmp_path / "test_summary.csv"
+        _write_summary_csv(summary_file, results)
+
+        rows = list(csv.DictReader(open(summary_file)))
+        assert len(rows) == 2
+        assert rows[0]["status"] == "completed"
+        assert rows[1]["status"] == "failed"
+        # 'error' should not appear as a column
+        assert "error" not in rows[0]

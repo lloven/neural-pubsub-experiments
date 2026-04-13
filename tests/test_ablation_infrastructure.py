@@ -68,15 +68,32 @@ class TestAblationComposeFile:
         content = Path("deploy/docker-compose.vm-ablation.yaml").read_text()
         assert "--processing-speed" in content
 
-    def test_ablation_compose_enables_market_load_aware(self):
-        """The ablation broker must run with --market-load-aware so the
-        market mechanism actually picks the least-loaded worker (the
-        bug fix is feature-flagged; main campaign compose does not set it).
+    def test_ablation_compose_enables_market_load_aware_via_env(self):
+        """The ablation compose must enable load-aware market placement via
+        the MARKET_LOAD_AWARE=true environment variable, NOT via the
+        --market-load-aware CLI flag in the entrypoint.
+
+        Using the CLI flag breaks rr-global (StaticBroker) because
+        StaticBroker's argparse doesn't accept --market-load-aware.
+        The env var works for NeuralBroker (reads it as the default
+        for --market-load-aware) and is silently ignored by StaticBroker.
         """
         from pathlib import Path
         content = Path("deploy/docker-compose.vm-ablation.yaml").read_text()
-        assert "--market-load-aware" in content, (
-            "Ablation compose must enable load-aware market placement"
+        assert "MARKET_LOAD_AWARE=true" in content, (
+            "Ablation compose must set MARKET_LOAD_AWARE=true in environment"
+        )
+
+    def test_ablation_compose_no_market_load_aware_cli_flag(self):
+        """The --market-load-aware CLI flag must NOT appear in the compose
+        entrypoint — it breaks StaticBroker (rr-global). L50 incident:
+        75 rr-global runs failed because StaticBroker rejected the flag.
+        """
+        from pathlib import Path
+        content = Path("deploy/docker-compose.vm-ablation.yaml").read_text()
+        assert "--market-load-aware" not in content, (
+            "Ablation compose must NOT pass --market-load-aware as CLI flag "
+            "(breaks StaticBroker). Use MARKET_LOAD_AWARE=true env var instead."
         )
 
     def test_main_compose_does_not_enable_market_load_aware(self):

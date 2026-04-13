@@ -33,11 +33,15 @@ services:
       - ${PEER_URL_1}
       - ${PEER_URL_2}
       - ${PEER_URL_3}
-      - --market-load-aware           # ABLATION: enable load-aware market_mode_placement
     environment:
       - PYTHONUNBUFFERED=1
       - BROKER_MODULE=${BROKER_MODULE:-src.broker.neural_broker}
       - GOVERNANCE_ENABLED=${GOVERNANCE_ENABLED:-false}
+      # ABLATION: enable load-aware market_mode_placement via env var.
+      # Must NOT be a CLI flag because StaticBroker (used by rr-global)
+      # rejects unknown argparse flags. NeuralBroker reads this env var
+      # as the default for its load-aware CLI option.
+      - MARKET_LOAD_AWARE=true
       - PLACEMENT_MODE=${PLACEMENT_MODE:-neural}
       - PLACEMENT=${PLACEMENT:-round_robin}
       - WAN_COST_MS=${WAN_COST_MS:-0}
