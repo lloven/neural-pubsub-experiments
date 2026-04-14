@@ -96,6 +96,20 @@ class TestAblationComposeFile:
             "(breaks StaticBroker). Use MARKET_LOAD_AWARE=true env var instead."
         )
 
+    def test_ablation_compose_enables_dynamic_bidding(self):
+        """Ablation compose must set DYNAMIC_BIDDING=true so the market
+        mechanism uses M/M/1 congestion pricing instead of static bids.
+        """
+        from pathlib import Path
+        content = Path("deploy/docker-compose.vm-ablation.yaml").read_text()
+        assert "DYNAMIC_BIDDING=true" in content
+
+    def test_main_compose_does_not_enable_dynamic_bidding(self):
+        """Main campaign compose must NOT enable dynamic bidding."""
+        from pathlib import Path
+        content = Path("deploy/docker-compose.vm.yaml").read_text()
+        assert "DYNAMIC_BIDDING" not in content
+
     def test_main_compose_does_not_enable_market_load_aware(self):
         """The main campaign compose must NOT have the flag, preserving
         reproducibility of market runs already collected.
