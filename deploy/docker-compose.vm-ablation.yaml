@@ -37,11 +37,12 @@ services:
       - PYTHONUNBUFFERED=1
       - BROKER_MODULE=${BROKER_MODULE:-src.broker.neural_broker}
       - GOVERNANCE_ENABLED=${GOVERNANCE_ENABLED:-false}
-      # ABLATION: enable load-aware market_mode_placement via env var.
-      # Must NOT be a CLI flag because StaticBroker (used by rr-global)
-      # rejects unknown argparse flags. NeuralBroker reads this env var
-      # as the default for its load-aware CLI option.
+      # ABLATION: enable load-aware placement + dynamic congestion pricing
+      # via env vars. Must NOT be CLI flags because StaticBroker (rr-global)
+      # rejects unknown argparse flags. NeuralBroker reads these env vars
+      # as defaults for its CLI options.
       - MARKET_LOAD_AWARE=true
+      - DYNAMIC_BIDDING=true
       - PLACEMENT_MODE=${PLACEMENT_MODE:-neural}
       - PLACEMENT=${PLACEMENT:-round_robin}
       - WAN_COST_MS=${WAN_COST_MS:-0}

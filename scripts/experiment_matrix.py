@@ -162,7 +162,8 @@ EXPERIMENTS: dict[str, dict] = {
             "docker-compose.vm-ablation.yaml and src.worker.ablation_worker "
             "(re-export of src.worker.worker) so the main campaign "
             "infrastructure is unchanged. Broker runs with "
-            "--market-load-aware flag (BrokerConfig.market_load_aware=True). "
+            "MARKET_LOAD_AWARE=true and DYNAMIC_BIDDING=true env vars "
+            "(load-aware worker selection + M/M/1 congestion pricing). "
             "Run length is identical to the main market campaign for "
             "direct cross-phase comparability."
         ),

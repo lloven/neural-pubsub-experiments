@@ -125,6 +125,13 @@ class BrokerConfig:
     # worker within a domain. Default False preserves the main campaign's
     # market behaviour for reproducibility.
     market_load_aware: bool = False
+    # Dynamic congestion pricing (ablation only).
+    # When True, _compute_clearing_prices_from uses M/M/1 cost model:
+    # cost = bid₀ / (1 - utilization) so loaded workers bid higher and
+    # their domain's clearing price increases, enabling Walrasian price
+    # discovery under heterogeneous conditions. Default False preserves
+    # the main campaign's static-bid behaviour.
+    dynamic_bidding: bool = False
 
 
 def load_config(path: str) -> BrokerConfig:
@@ -446,13 +453,23 @@ class NeuralBroker:
 
         bids = []
         for w in workers.values():
+            if self.config.dynamic_bidding:
+                # M/M/1 congestion pricing: cost diverges as utilization → 1.
+                # Slow/loaded workers produce higher clearing prices in their
+                # domain, enabling cross-domain routing to cheaper domains.
+                utilization = min(
+                    w.current_load / max(w.capacity, 1e-6), 0.99,
+                )
+                cost = w.bid_cost_ms / (1.0 - utilization)
+            else:
+                cost = w.bid_cost_ms
             for st in known_stage_types:
                 bid = WorkerBid(
                     worker_id=w.node_id,
                     domain_id=w.domain_id,
                     stage_type=st,
-                    compute_ms=w.bid_cost_ms,
-                    cost_per_stage=w.bid_cost_ms,
+                    compute_ms=cost,
+                    cost_per_stage=cost,
                 )
                 bids.append(bid)
 
@@ -1782,6 +1799,13 @@ def _parse_args() -> argparse.Namespace:
         help="Enable load-aware worker selection in market mode (ablation only).",
     )
     parser.add_argument(
+        "--dynamic-bidding",
+        action="store_true",
+        dest="dynamic_bidding",
+        default=os.environ.get("DYNAMIC_BIDDING", "false").lower() == "true",
+        help="Enable M/M/1 congestion pricing in market mode (ablation only).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -1818,6 +1842,7 @@ def _make_config_from_args(args: argparse.Namespace) -> BrokerConfig:
     cfg.placement_mode = args.placement_mode
     cfg.wan_cost_ms = args.wan_cost_ms
     cfg.market_load_aware = args.market_load_aware
+    cfg.dynamic_bidding = args.dynamic_bidding
     cfg.transport = args.transport
     cfg.kafka_bootstrap = args.kafka_bootstrap if args.transport == "kafka" else None
 
