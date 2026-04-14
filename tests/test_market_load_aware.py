@@ -226,6 +226,104 @@ class TestBrokerDispatchIntegration:
         assert placement["s1"] == "d1-w2"
 
 
+class TestDynamicBiddingDispatchIntegration:
+    """End-to-end: dynamic bidding flows through the full broker dispatch
+    path and enables cross-domain routing under heterogeneous load.
+
+    Complements TestDynamicBidding (unit-level clearing price checks) by
+    exercising BrokerConfig → _compute_clearing_prices_from →
+    _dispatch_placement_on → market_mode_placement in one shot.
+    """
+
+    @staticmethod
+    def _make_broker(dynamic_bidding: bool):
+        from src.broker.neural_broker import BrokerConfig, NeuralBroker
+        return NeuralBroker(BrokerConfig(
+            domain_id="d1",
+            broker_id="b1",
+            placement_mode="market",
+            market_load_aware=True,
+            dynamic_bidding=dynamic_bidding,
+            wan_cost_ms=50.0,
+        ))
+
+    @staticmethod
+    def _make_heterogeneous_workers():
+        from src.broker.models import WorkerInfo
+        workers = {}
+        for i in range(2):
+            wid = f"d1-w{i}"
+            workers[wid] = WorkerInfo(
+                node_id=wid, domain_id="d1", slice_id="URLLC",
+                capacity=1.0, url=f"http://{wid}:8081",
+                current_load=0.4, bid_cost_ms=100.0,
+            )
+        for i in range(2):
+            wid = f"d2-w{i}"
+            workers[wid] = WorkerInfo(
+                node_id=wid, domain_id="d2", slice_id="URLLC",
+                capacity=1.0, url=f"http://{wid}:8081",
+                current_load=0.13, bid_cost_ms=100.0,
+            )
+        return workers
+
+    @staticmethod
+    def _make_topology(workers):
+        from src.broker.placement import ExecutionUnit, NetworkTopology
+        nodes = [
+            ExecutionUnit(w.node_id, w.domain_id, w.slice_id,
+                          w.capacity, w.current_load)
+            for w in workers.values()
+        ]
+        lat = {}
+        node_list = list(workers.values())
+        for i, a in enumerate(node_list):
+            for j, b in enumerate(node_list):
+                if j > i:
+                    lat[(a.node_id, b.node_id)] = (
+                        2.0 if a.domain_id == b.domain_id else 20.0
+                    )
+        return NetworkTopology(nodes=nodes, latency_matrix=lat)
+
+    def test_dynamic_dispatch_routes_to_fast_domain(self):
+        from src.broker.placement import GovernancePolicy
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = self._make_broker(dynamic_bidding=True)
+        workers = self._make_heterogeneous_workers()
+        topo = self._make_topology(workers)
+        dag = PipelineDAG()
+        dag.add_stage(Stage("s1", "predict", 0.1, 1.0))
+
+        placement = broker._dispatch_placement_on(
+            dag, topo, GovernancePolicy(), workers,
+        )
+        assert placement is not None
+        assert placement["s1"].startswith("d2"), (
+            f"Dynamic bidding should route from loaded d1 to cheaper d2, "
+            f"got {placement['s1']}"
+        )
+
+    def test_static_dispatch_stays_local(self):
+        from src.broker.placement import GovernancePolicy
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = self._make_broker(dynamic_bidding=False)
+        workers = self._make_heterogeneous_workers()
+        topo = self._make_topology(workers)
+        dag = PipelineDAG()
+        dag.add_stage(Stage("s1", "predict", 0.1, 1.0))
+
+        placement = broker._dispatch_placement_on(
+            dag, topo, GovernancePolicy(), workers,
+        )
+        assert placement is not None
+        assert placement["s1"].startswith("d1"), (
+            f"Static bidding should stay local (equal prices, WAN penalty), "
+            f"got {placement['s1']}"
+        )
+
+
 class TestDynamicBidding:
     """Dynamic congestion pricing: clearing prices reflect worker utilization.
 
