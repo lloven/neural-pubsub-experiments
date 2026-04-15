@@ -513,3 +513,124 @@ class TestDynamicBidding:
             f"d1 price={prices['d1'].get('predict', '?')}, "
             f"d2 price={prices['d2'].get('predict', '?')}"
         )
+
+
+class TestFederatedPriceExchange:
+    """Federated price signal exchange: brokers share clearing prices so
+    market_mode_placement can route cross-domain.
+
+    Without federation, each broker only sees its local workers → clearing
+    prices contain 1 domain → no cross-domain routing possible. This test
+    class verifies that _peer_prices from federation are merged into the
+    prices dict passed to market_mode_placement.
+    """
+
+    @staticmethod
+    def _make_broker(domain_id: str = "d1", dynamic_bidding: bool = True):
+        from src.broker.neural_broker import BrokerConfig, NeuralBroker
+        return NeuralBroker(BrokerConfig(
+            domain_id=domain_id,
+            broker_id=f"b-{domain_id}",
+            placement_mode="market",
+            market_load_aware=True,
+            dynamic_bidding=dynamic_bidding,
+            wan_cost_ms=50.0,
+        ))
+
+    @staticmethod
+    def _make_local_workers(domain_id: str, load: float, bid: float):
+        from src.broker.models import WorkerInfo
+        return {
+            f"{domain_id}-w{i}": WorkerInfo(
+                node_id=f"{domain_id}-w{i}",
+                domain_id=domain_id,
+                slice_id="URLLC",
+                capacity=1.0,
+                url=f"http://{domain_id}-w{i}:8081",
+                current_load=load,
+                bid_cost_ms=bid,
+            )
+            for i in range(2)
+        }
+
+    @staticmethod
+    def _make_topology(workers):
+        from src.broker.placement import ExecutionUnit, NetworkTopology
+        nodes = [
+            ExecutionUnit(w.node_id, w.domain_id, w.slice_id,
+                          w.capacity, w.current_load)
+            for w in workers.values()
+        ]
+        lat = {}
+        node_list = list(workers.values())
+        for i, a in enumerate(node_list):
+            for j, b in enumerate(node_list):
+                if j > i:
+                    lat[(a.node_id, b.node_id)] = (
+                        2.0 if a.domain_id == b.domain_id else 20.0
+                    )
+        return NetworkTopology(nodes=nodes, latency_matrix=lat)
+
+    def test_peer_prices_cache_initially_empty(self):
+        broker = self._make_broker()
+        assert broker._peer_prices == {}
+
+    def test_dispatch_merges_peer_prices(self):
+        """When _peer_prices has a cheaper remote domain, market routes there."""
+        from src.broker.placement import GovernancePolicy
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = self._make_broker(domain_id="d1")
+        # Only d1 workers registered (simulating federated single-domain broker)
+        workers = self._make_local_workers("d1", load=0.0, bid=200.0)
+        broker._workers = workers
+        topo = self._make_topology(workers)
+
+        # Simulate receiving d2's cheaper prices via federation
+        broker._peer_prices["d2"] = {"predict": 67.0}
+
+        # Need d2 workers in the topology for placement to find them
+        from src.broker.placement import ExecutionUnit
+        d2_nodes = [
+            ExecutionUnit(f"d2-w{i}", "d2", "URLLC", 1.0, 0.0)
+            for i in range(2)
+        ]
+        topo.nodes.extend(d2_nodes)
+        for d2n in d2_nodes:
+            for d1n in [n for n in topo.nodes if n.domain_id == "d1"]:
+                topo.latency_matrix[(d1n.node_id, d2n.node_id)] = 20.0
+
+        dag = PipelineDAG()
+        dag.add_stage(Stage("s1", "predict", 0.1, 1.0))
+
+        placement = broker._dispatch_placement_on(
+            dag, topo, GovernancePolicy(), workers,
+        )
+        assert placement is not None
+        # d1 price=200, d2 price=67+WAN(50)=117 < 200 → route to d2
+        assert placement["s1"].startswith("d2"), (
+            f"Expected cross-domain routing to d2 via federation prices, "
+            f"got {placement['s1']}"
+        )
+
+    def test_dispatch_without_peer_prices_stays_local(self):
+        """Without federation prices, single-domain broker stays local."""
+        from src.broker.placement import GovernancePolicy
+        from src.pipeline.dag import PipelineDAG, Stage
+
+        broker = self._make_broker(domain_id="d1")
+        workers = self._make_local_workers("d1", load=0.0, bid=200.0)
+        broker._workers = workers
+        topo = self._make_topology(workers)
+
+        # No _peer_prices set → only d1 prices available
+        dag = PipelineDAG()
+        dag.add_stage(Stage("s1", "predict", 0.1, 1.0))
+
+        placement = broker._dispatch_placement_on(
+            dag, topo, GovernancePolicy(), workers,
+        )
+        assert placement is not None
+        assert placement["s1"].startswith("d1"), (
+            f"Without peer prices, should stay local d1, got {placement['s1']}"
+        )

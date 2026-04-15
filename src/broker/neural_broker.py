@@ -280,6 +280,10 @@ class NeuralBroker:
         )
         # Peer summaries cache: domain_id -> list[SubscriptionSummary]
         self._peer_summaries: dict[str, list[SubscriptionSummary]] = {}
+        # Peer clearing prices cache: domain_id -> {stage_type: price}
+        # Populated by POST /federation/price-signal from federated peers.
+        # Merged into local prices in _dispatch_placement_on for cross-domain routing.
+        self._peer_prices: dict[str, dict[str, float]] = {}
 
     # ------------------------------------------------------------------
     # Dual-transport dispatch helper
@@ -409,6 +413,39 @@ class NeuralBroker:
             len(summary.clusters),
             sum(c.available_capacity for c in summary.clusters),
         )
+        # Push clearing prices to federation peers (market mode only).
+        if self.config.placement_mode == "market":
+            import asyncio
+            asyncio.ensure_future(self._push_price_signal())
+
+    async def _push_price_signal(self) -> None:
+        """Push local clearing prices to all federation peers.
+
+        Best-effort: failures are logged but do not propagate. Stale
+        peer prices cause suboptimal routing, not incorrect placement
+        (governance constraints are still enforced locally).
+        """
+        if not self._http_client or not self.config.peer_urls:
+            return
+        prices = self._compute_clearing_prices_from(self._workers)
+        local_prices = prices.get(self.config.domain_id, {})
+        if not local_prices:
+            return
+        payload = {
+            "domain_id": self.config.domain_id,
+            "prices": local_prices,
+        }
+        for peer_url in self.config.peer_urls:
+            try:
+                await self._http_client.post(
+                    f"{peer_url}/federation/price-signal",
+                    json=payload,
+                    timeout=5.0,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Price signal push to %s failed: %s", peer_url, exc,
+                )
 
     def _update_worker_load(self, node_id: str, delta: float) -> None:
         """Adjust the current_load of a worker and resync the topology node.
@@ -534,6 +571,11 @@ class NeuralBroker:
 
         if mode == "market":
             prices = self._compute_clearing_prices_from(workers)
+            # Merge peer clearing prices from federation so
+            # market_mode_placement can compare cross-domain costs.
+            for domain_id, peer_prices in self._peer_prices.items():
+                if domain_id not in prices:
+                    prices[domain_id] = dict(peer_prices)
             return market_mode_placement(
                 dag,
                 topology,
@@ -1637,6 +1679,28 @@ class NeuralBroker:
                 "from_domain": summary.domain_id,
                 "clusters": len(summary.clusters),
             }
+
+        # ------------------------------------------------------------------
+        # POST /federation/price-signal  (receive peer clearing prices)
+        # ------------------------------------------------------------------
+
+        @app.post("/federation/price-signal")
+        async def federation_price_receive(request: Request):
+            """Receive a peer broker's clearing prices for cross-domain routing.
+
+            Payload: JSON ``{"domain_id": str, "prices": {stage_type: float}}``.
+            """
+            body = await request.json()
+            domain_id = body.get("domain_id")
+            prices = body.get("prices", {})
+            if not domain_id or not isinstance(prices, dict):
+                raise HTTPException(status_code=400, detail="Invalid price signal.")
+            self._peer_prices[domain_id] = prices
+            logger.debug(
+                "Received price signal from domain %s: %d stage types.",
+                domain_id, len(prices),
+            )
+            return {"status": "received", "domain_id": domain_id}
 
         # ------------------------------------------------------------------
         # GET /federation/summary  (serve to peers)
