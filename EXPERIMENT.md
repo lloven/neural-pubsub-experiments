@@ -325,11 +325,11 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 
 | Scenario | Theory | Stress factor | Configuration | Expected effect |
 |----------|--------|---------------|---------------|-----------------|
-| failure | Information completeness | Worker kill at t=measurement_s/2 | 5 pps, kill `deploy-worker-0-1` on VM2 | rr-global loses ~1 health-check interval of throughput; market reroutes within 1 dispatch round (dead worker price → ∞) |
-| sat-20 | Admission control | Pre-saturation 20 pps | 20 pps, no failure | both strategies sustain throughput; baseline for the sweep |
-| sat-25 | Admission control | At-saturation 25 pps | 25 pps, no failure | rr-global tail latency begins to diverge; market clearing prices start to bind |
-| sat-30 | Admission control | Above-saturation 30 pps | 30 pps, no failure | rr-global queues unboundedly; market rejects unaffordable pipelines via clearing prices |
-| heterogeneous | Price discovery | Edge VMs 2x slower, cloud 1.5x faster | `WORKER_PROCESSING_SPEED=2.0` on VM1/VM2; `=0.67` on VM3/VM4 | rr-global splits load equally and bottlenecks on slow workers; market discovers fast workers via load-aware prices |
+| failure | Information completeness | Kill 12/48 workers (25% capacity) at t=measurement_s/2 | 50 pps, kill all 12 workers on VM2 | With 25% capacity gone at elevated load, rr-global continues dispatching to dead workers during detection window; market's congestion prices spike for the degraded domain and redirect traffic |
+| sat-100 | Admission control | Near-saturation 100 pps (~47% util) | 100 pps, no failure | Both strategies sustain throughput; baseline for the sweep |
+| sat-150 | Admission control | At-saturation 150 pps (~70% util) | 150 pps, no failure | rr-global tail latency begins to diverge as workers queue; market clearing prices start to bind |
+| sat-200 | Admission control | Above-saturation 200 pps (~94% util) | 200 pps, no failure | rr-global queues unboundedly; market rejects unaffordable pipelines via congestion pricing |
+| heterogeneous | Price discovery | Edge VMs 2x slower, cloud 1.5x faster | `WORKER_PROCESSING_SPEED=2.0` on VM1/VM2; `=0.67` on VM3/VM4 | rr-global splits load equally and bottlenecks on slow workers; market discovers fast workers via bid-scaled prices |
 
 **Run length:** Identical to the main market campaign. `warmup_s` and `measurement_s` are inherited from `EXPERIMENTS["ablation"]` in `scripts/experiment_matrix.py`, which references the same `MAIN_CAMPAIGN_WARMUP_S` / `MAIN_CAMPAIGN_MEASUREMENT_S` constants as `EXPERIMENTS["market"]`. At the current 240 s + 600 s = 14 min/run setting, every ablation scenario uses the same statistical window as the main campaign so that CR / latency / p95 distributions are directly comparable across phases. Failure injection occurs at `measurement_s // 2` (5 min into a 10 min measurement window), leaving a 5 min post-failure observation window. To rescale every market-class phase at once, edit the two constants in `scripts/experiment_matrix.py`.
 

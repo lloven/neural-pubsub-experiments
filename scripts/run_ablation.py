@@ -114,29 +114,29 @@ PIPELINE_SLUGS = list(PIPELINE_MAP)
 # target, speed factors).
 SCENARIOS: dict[str, dict] = {
     "failure": {
-        "description": "Worker kill on VM2 mid-run",
-        "arrival_rate": 5.0,
-        "failure_target": "deploy-worker-0-1",
+        "description": "Kill 12 workers (25% capacity) on VM2 at elevated load",
+        "arrival_rate": 50.0,
+        "failure_target": [f"deploy-worker-0-{i}" for i in range(12)],
         "failure_vm_index": 1,        # VM2 (eMBB workers)
         "failure_delay_s": _FAILURE_DELAY_S,  # halfway through measurement
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
-    "sat-20": {
-        "description": "Pre-saturation arrival rate (20 pps)",
-        "arrival_rate": 20.0,
+    "sat-100": {
+        "description": "Near-saturation (100 pps, ~47% util with 48 workers)",
+        "arrival_rate": 100.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
-    "sat-25": {
-        "description": "At-saturation arrival rate (25 pps)",
-        "arrival_rate": 25.0,
+    "sat-150": {
+        "description": "At-saturation (150 pps, ~70% util)",
+        "arrival_rate": 150.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
-    "sat-30": {
-        "description": "Above-saturation arrival rate (30 pps)",
-        "arrival_rate": 30.0,
+    "sat-200": {
+        "description": "Above-saturation (200 pps, ~94% util)",
+        "arrival_rate": 200.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
