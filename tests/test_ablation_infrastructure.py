@@ -130,10 +130,10 @@ class TestRunAblationPhase:
         assert run_ablation is not None
 
     def test_five_scenarios_defined(self):
-        """failure, sat-20, sat-25, sat-30, heterogeneous."""
+        """failure, sat-100, sat-150, sat-200, heterogeneous."""
         from scripts.run_ablation import SCENARIOS
         assert set(SCENARIOS.keys()) == {
-            "failure", "sat-20", "sat-25", "sat-30", "heterogeneous",
+            "failure", "sat-100", "sat-150", "sat-200", "heterogeneous",
         }
 
     def test_three_strategies_per_scenario(self):
@@ -154,12 +154,32 @@ class TestRunAblationPhase:
         from scripts.run_ablation import SCENARIOS
         assert SCENARIOS["failure"].get("failure_target") is not None
 
-    def test_saturation_sweep_covers_inflection_point(self):
-        """Three saturation rates around the empirical 25 pps inflection."""
+    def test_failure_scenario_kills_twelve_workers(self):
+        """25% capacity kill: 12 workers on VM2 (one full VM's worth)."""
         from scripts.run_ablation import SCENARIOS
-        assert SCENARIOS["sat-20"]["arrival_rate"] == 20.0
-        assert SCENARIOS["sat-25"]["arrival_rate"] == 25.0
-        assert SCENARIOS["sat-30"]["arrival_rate"] == 30.0
+        targets = SCENARIOS["failure"]["failure_target"]
+        assert isinstance(targets, list), "failure_target must be a list"
+        assert len(targets) == 12
+
+    def test_failure_scenario_uses_elevated_load(self):
+        """Failure at elevated load (50 pps) so remaining 36 workers
+        face real pressure after the 12-worker kill.
+        """
+        from scripts.run_ablation import SCENARIOS
+        assert SCENARIOS["failure"]["arrival_rate"] == 50.0
+
+    def test_saturation_sweep_covers_real_inflection_point(self):
+        """Three saturation rates around the REAL ~200 pps inflection.
+
+        The original 20/25/30 pps sweep produced null results because
+        workers use asyncio-concurrent execution, giving ~10x more
+        throughput than the sequential estimate. Actual saturation is
+        ~200 pps for 48 workers with 8-stage pipelines.
+        """
+        from scripts.run_ablation import SCENARIOS
+        assert SCENARIOS["sat-100"]["arrival_rate"] == 100.0
+        assert SCENARIOS["sat-150"]["arrival_rate"] == 150.0
+        assert SCENARIOS["sat-200"]["arrival_rate"] == 200.0
 
     def test_heterogeneous_scenario_has_speed_factors(self):
         from scripts.run_ablation import SCENARIOS
@@ -316,11 +336,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="sat-25",
+                scenario_name="sat-150",
                 strategy="rr-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=25.0,
+                arrival_rate=150.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -357,11 +377,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="sat-25",
+                scenario_name="sat-150",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=25.0,
+                arrival_rate=150.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -389,11 +409,11 @@ class TestFailurePropagation:
                 "error": "federation_timeout",
             }
             run = AblationRunConfig(
-                scenario_name="sat-25",
+                scenario_name="sat-150",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=25.0,
+                arrival_rate=150.0,
                 warmup_s=240,
                 measurement_s=600,
             )
@@ -410,11 +430,11 @@ class TestFailurePropagation:
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             mock_run.return_value = {"run_id": "test", "status": "completed"}
             run = AblationRunConfig(
-                scenario_name="sat-25",
+                scenario_name="sat-150",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=25.0,
+                arrival_rate=150.0,
                 warmup_s=240,
                 measurement_s=600,
             )
@@ -428,11 +448,11 @@ class TestFailurePropagation:
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             mock_run.return_value = None  # dry-run returns None
             run = AblationRunConfig(
-                scenario_name="sat-25",
+                scenario_name="sat-150",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=25.0,
+                arrival_rate=150.0,
                 warmup_s=240,
                 measurement_s=600,
             )

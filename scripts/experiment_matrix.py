@@ -143,7 +143,7 @@ EXPERIMENTS: dict[str, dict] = {
     },
     "ablation": {
         "description": "Stress scenarios where rr-global breaks down",
-        "configs": ["failure", "sat-20", "sat-25", "sat-30", "heterogeneous"],
+        "configs": ["failure", "sat-100", "sat-150", "sat-200", "heterogeneous"],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
@@ -156,8 +156,8 @@ EXPERIMENTS: dict[str, dict] = {
         "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
         # 5 scenarios x 3 strategies x 3 pipelines x 5 seeds = 225
         "notes": (
-            "Tier 2c ablation. Tests H-RR-RECOVER (worker failure), "
-            "H-RR-SATURATE (saturation rate sweep 20/25/30 pps), "
+            "Tier 2c ablation. Tests H-RR-RECOVER (12-worker kill at 50 pps), "
+            "H-RR-SATURATE (saturation sweep 100/150/200 pps), "
             "H-RR-HETERO (edge 2x slower / cloud 1.5x faster). Uses "
             "docker-compose.vm-ablation.yaml and src.worker.ablation_worker "
             "(re-export of src.worker.worker) so the main campaign "
@@ -204,14 +204,14 @@ HYPOTHESIS_MAP: dict[str, dict] = {
         "phase": "ablation",
         "configs": ["failure"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
-        "test": "worker kill at t=90s, measure CR drop per strategy",
+        "test": "kill 12/48 workers (25% capacity) at 50 pps, measure CR drop per strategy",
         "theory": "Information completeness: prices encode worker availability",
     },
     "H-RR-SATURATE": {
         "phase": "ablation",
-        "configs": ["sat-20", "sat-25", "sat-30"],
+        "configs": ["sat-100", "sat-150", "sat-200"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
-        "test": "rate sweep 20/25/30 pps, measure tail latency divergence",
+        "test": "rate sweep 100/150/200 pps (47%/70%/94% util), measure tail latency divergence",
         "theory": "Walrasian admission control: prices clear excess demand",
     },
     "H-RR-HETERO": {

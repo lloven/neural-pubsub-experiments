@@ -188,18 +188,24 @@ def teardown_wan_emulation(vm2: VMConfig, vm3: VMConfig, dry_run: bool = False) 
 
 def inject_remote_kill(
     vm: VMConfig,
-    container: str,
+    container: str | list[str],
     delay_s: int = 0,
     dry_run: bool = False,
 ) -> None:
-    """Kill a container on a remote VM via SSH.
+    """Kill one or more containers on a remote VM via SSH.
 
-    Sleeps delay_s seconds, then runs docker kill. Designed to be called
-    in a daemon thread from run_single().
+    Sleeps delay_s seconds, then runs ``docker kill``. Accepts a single
+    container name or a list (for bulk failure injection, e.g. killing
+    all 12 workers on a VM). Designed to be called in a daemon thread
+    from run_single().
     """
     if delay_s > 0 and not dry_run:
         time.sleep(delay_s)
-    _ssh(vm.ssh_host, f"docker kill {container}", dry_run=dry_run)
+    if isinstance(container, list):
+        containers_str = " ".join(container)
+    else:
+        containers_str = container
+    _ssh(vm.ssh_host, f"docker kill {containers_str}", dry_run=dry_run)
 
 
 def inject_remote_partition(
