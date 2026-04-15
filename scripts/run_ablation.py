@@ -87,6 +87,12 @@ STRATEGY_CONFIG: dict[str, dict] = {
     "market-quad": {
         "placement_mode": "market",
         "governance_config": "all",
+        # Oracle mode: single broker on VM1 with all 48 workers visible.
+        # This isolates the PRICING mechanism from the FEDERATION plumbing.
+        # H-RR-HETERO tests whether market clearing prices discover fast
+        # workers (Walrasian price discovery), not whether federation
+        # forwarding routes correctly — that's tested by H-FEDERATION.
+        "oracle_mode": True,
     },
 }
 
