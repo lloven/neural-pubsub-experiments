@@ -508,7 +508,14 @@ def market_mode_placement(
             placed = True
 
         if not placed:
-            # No available worker in chosen domain → try local fallback
+            if chosen_domain != local_domain:
+                # Remote domain chosen by price comparison but no workers
+                # available locally for that domain (expected in federated
+                # mode where each broker only has local workers). Return
+                # None to signal the publish handler to forward the
+                # pipeline to the chosen domain's broker via federation.
+                return None
+            # Local domain has no capacity → last-resort fallback
             fallback = [
                 w for w in domain_workers.get(local_domain, [])
                 if w.residual_capacity >= stage.computational_demand
