@@ -290,7 +290,11 @@ class Worker:
             "domain_id": self.config.domain_id,
             "slice_id": self.config.slice_id,
             "capacity": self.config.capacity,
-            "bid_cost_ms": self.config.bid_cost_ms,
+            # Scale bid by processing_speed so slow workers advertise higher
+            # cost, feeding directly into market clearing prices. A 2x slower
+            # worker bids 2x → its domain becomes more expensive → market
+            # routes to cheaper (faster) domains.
+            "bid_cost_ms": self.config.bid_cost_ms * self.config.processing_speed,
         }
         if self.config.callback_url:
             payload["url"] = self.config.callback_url

@@ -324,6 +324,57 @@ class TestDynamicBiddingDispatchIntegration:
         )
 
 
+class TestWorkerBidScalesWithSpeed:
+    """Workers must scale bid_cost_ms by processing_speed at registration.
+
+    A 2x slower worker (processing_speed=2.0) takes 2x longer per stage
+    and should bid 2x the base cost. This feeds directly into clearing
+    prices so the market can differentiate fast and slow domains even at
+    low utilization where the M/M/1 congestion term is negligible.
+    """
+
+    def test_bid_scales_with_processing_speed(self):
+        from src.worker.worker import WorkerConfig, Worker
+        cfg = WorkerConfig(
+            node_id="w1", domain_id="d1", slice_id="URLLC",
+            broker_url="http://localhost:8080",
+            capacity=1.0,
+            bid_cost_ms=100.0,
+            processing_speed=2.0,
+        )
+        w = Worker(cfg)
+        payload = w.registration_payload()
+        assert payload["bid_cost_ms"] == 200.0, (
+            f"bid should be 100 * 2.0 = 200, got {payload['bid_cost_ms']}"
+        )
+
+    def test_bid_at_default_speed_is_unchanged(self):
+        from src.worker.worker import WorkerConfig, Worker
+        cfg = WorkerConfig(
+            node_id="w1", domain_id="d1", slice_id="URLLC",
+            broker_url="http://localhost:8080",
+            capacity=1.0,
+            bid_cost_ms=100.0,
+            processing_speed=1.0,
+        )
+        w = Worker(cfg)
+        payload = w.registration_payload()
+        assert payload["bid_cost_ms"] == 100.0
+
+    def test_fast_worker_bids_less(self):
+        from src.worker.worker import WorkerConfig, Worker
+        cfg = WorkerConfig(
+            node_id="w1", domain_id="d1", slice_id="URLLC",
+            broker_url="http://localhost:8080",
+            capacity=1.0,
+            bid_cost_ms=100.0,
+            processing_speed=0.67,
+        )
+        w = Worker(cfg)
+        payload = w.registration_payload()
+        assert abs(payload["bid_cost_ms"] - 67.0) < 1.0
+
+
 class TestDynamicBidding:
     """Dynamic congestion pricing: clearing prices reflect worker utilization.
 
