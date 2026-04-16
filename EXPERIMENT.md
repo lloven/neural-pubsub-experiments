@@ -61,7 +61,7 @@ The manuscript (IEEE TNSE) uses a different hypothesis naming scheme. This table
 
 **Ablation phase**: Five stress scenarios (failure, sat-20, sat-25, sat-30, heterogeneous) test the round-robin baseline's failure modes by isolating distinct Walrasian mechanisms (information completeness, admission control, price discovery). The saturation scenario is a 3-rate sweep around the empirically derived 25 pps inflection point so the rate dependence (not a single anecdotal datapoint) is characterised. The main allocation experiments use uniform conditions where rr-global is structurally hard to beat; the ablation introduces conditions that expose its limitations. Uses a separate compose file (`docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of the main worker) so the main campaign infrastructure is not modified during ablation runs. The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement`. The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection).
 
-**Total Tier 2 runs**: 590 (270 allocation + 60 governance + 15 federation + 20 resilience + 225 ablation) = ~141 hours (market+governance ~80h at 14m/run measured, federation+resilience ~7h at 12m/run, ablation ~54h at 14m/run after extending its run length to match the main campaign for cross-phase comparability).
+**Total Tier 2 runs**: 815 (270 allocation + 60 governance + 15 federation + 20 resilience + 450 ablation) = ~196 hours (market+governance ~80h at 14m/run measured, federation+resilience ~7h at 12m/run, ablation ~109h at 14m/run with the expanded 3x2 failure factorial + 3-rate saturation sweep).
 
 ## 3. Experimental Variables
 
@@ -325,7 +325,8 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 
 | Scenario | Theory | Stress factor | Configuration | Expected effect |
 |----------|--------|---------------|---------------|-----------------|
-| failure | Information completeness | Kill 12/48 workers (25% capacity) at t=measurement_s/2 | 50 pps, kill all 12 workers on VM2 | With 25% capacity gone at elevated load, rr-global continues dispatching to dead workers during detection window; market's congestion prices spike for the degraded domain and redirect traffic |
+| failure-{50,100,150}-12 | Information completeness | Kill 12 workers (25% capacity) on VM2 at load L | L pps, kill all VM2 workers | 3x2 failure factorial varies load × kill ratio. 12-kill at low load (50) is baseline; at high load (150) tests info-completeness when surviving workers are saturated |
+| failure-{50,100,150}-24 | Information completeness | Kill 24 workers (50% capacity) on VM1+VM2 at load L | L pps, kill all edge workers | Severe capacity loss; market should reroute via prices while rr-global keeps dispatching to dead workers |
 | sat-100 | Admission control | Near-saturation 100 pps (~47% util) | 100 pps, no failure | Both strategies sustain throughput; baseline for the sweep |
 | sat-150 | Admission control | At-saturation 150 pps (~70% util) | 150 pps, no failure | rr-global tail latency begins to diverge as workers queue; market clearing prices start to bind |
 | sat-200 | Admission control | Above-saturation 200 pps (~94% util) | 200 pps, no failure | rr-global queues unboundedly; market rejects unaffordable pipelines via congestion pricing |
@@ -333,7 +334,7 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 
 **Run length:** Identical to the main market campaign. `warmup_s` and `measurement_s` are inherited from `EXPERIMENTS["ablation"]` in `scripts/experiment_matrix.py`, which references the same `MAIN_CAMPAIGN_WARMUP_S` / `MAIN_CAMPAIGN_MEASUREMENT_S` constants as `EXPERIMENTS["market"]`. At the current 240 s + 600 s = 14 min/run setting, every ablation scenario uses the same statistical window as the main campaign so that CR / latency / p95 distributions are directly comparable across phases. Failure injection occurs at `measurement_s // 2` (5 min into a 10 min measurement window), leaving a 5 min post-failure observation window. To rescale every market-class phase at once, edit the two constants in `scripts/experiment_matrix.py`.
 
-**Total:** 5 scenarios × 3 strategies × 3 pipelines × 5 seeds = **225 runs (~54 hours at 14 min/run)**.
+**Total:** 10 scenarios × 3 strategies × 3 pipelines × 5 seeds = **450 runs (~109 hours at 14 min/run)**.
 
 **Infrastructure separation:** The ablation uses a distinct compose file (`deploy/docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of `src.worker.worker`) so the main campaign's compose stack and worker code are unchanged. The ablation infrastructure is wired through `multi_vm_runner.start_cluster`'s `compose_file` and `per_vm_env` parameters, which default to existing behaviour for the main campaign.
 

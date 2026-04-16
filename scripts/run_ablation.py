@@ -112,16 +112,45 @@ PIPELINE_SLUGS = list(PIPELINE_MAP)
 # rescaling the main campaign automatically rescales the ablation. Each
 # scenario only owns scenario-specific parameters (arrival rate, failure
 # target, speed factors).
-SCENARIOS: dict[str, dict] = {
-    "failure": {
-        "description": "Kill 12 workers (25% capacity) on VM2 at elevated load",
-        "arrival_rate": 50.0,
-        "failure_target": [f"deploy-worker-0-{i}" for i in range(12)],
-        "failure_vm_index": 1,        # VM2 (eMBB workers)
-        "failure_delay_s": _FAILURE_DELAY_S,  # halfway through measurement
+# Failure factorial: 3 loads × 2 kill ratios = 6 scenarios.
+# 12-kill = all VM2 workers (25% capacity). 24-kill = VM1 + VM2 (50%, both edge VMs).
+_VM2_WORKERS = [f"deploy-worker-0-{i}" for i in range(12)]
+_VM1_WORKERS = [f"deploy-worker-0-{i}" for i in range(12)]  # same names, different host
+
+def _failure_scenario(load: float, kill_count: int) -> dict:
+    """Build a failure scenario config.
+
+    kill_count == 12 → single-VM kill (VM2 only) via failure_target list.
+    kill_count == 24 → multi-VM kill (VM1 + VM2) via failure_targets dict list.
+    """
+    base = {
+        "arrival_rate": load,
+        "failure_delay_s": _FAILURE_DELAY_S,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
-    },
+    }
+    if kill_count == 12:
+        base["description"] = f"Kill 12 workers on VM2 (25% capacity) at {load:.0f} pps"
+        base["failure_target"] = list(_VM2_WORKERS)
+        base["failure_vm_index"] = 1  # VM2
+    elif kill_count == 24:
+        base["description"] = f"Kill 24 workers on VM1+VM2 (50% capacity) at {load:.0f} pps"
+        base["failure_targets"] = [
+            {"vm_idx": 0, "containers": list(_VM1_WORKERS)},
+            {"vm_idx": 1, "containers": list(_VM2_WORKERS)},
+        ]
+    else:
+        raise ValueError(f"Unsupported kill_count {kill_count}")
+    return base
+
+
+SCENARIOS: dict[str, dict] = {
+    "failure-50-12": _failure_scenario(50.0, 12),
+    "failure-100-12": _failure_scenario(100.0, 12),
+    "failure-150-12": _failure_scenario(150.0, 12),
+    "failure-50-24": _failure_scenario(50.0, 24),
+    "failure-100-24": _failure_scenario(100.0, 24),
+    "failure-150-24": _failure_scenario(150.0, 24),
     "sat-100": {
         "description": "Near-saturation (100 pps, ~47% util with 48 workers)",
         "arrival_rate": 100.0,
@@ -214,6 +243,7 @@ def _run_distributed(run: AblationRunConfig, dry_run: bool) -> dict:
     # Failure injection setup
     failure_fn = None
     if "failure_target" in scenario:
+        # Single-VM kill (12 workers on one VM)
         vm_idx = scenario["failure_vm_index"]
         failure_fn = partial(
             multi_vm_runner.inject_remote_kill,
@@ -221,6 +251,33 @@ def _run_distributed(run: AblationRunConfig, dry_run: bool) -> dict:
             container=scenario["failure_target"],
             delay_s=scenario["failure_delay_s"],
         )
+    elif "failure_targets" in scenario:
+        # Multi-VM kill (24 workers spanning two VMs).
+        # All targets fire concurrently after the same delay so the
+        # capacity loss is simultaneous, not staggered.
+        targets = scenario["failure_targets"]
+        delay_s = scenario["failure_delay_s"]
+
+        def _multi_vm_kill():
+            import threading
+            threads = []
+            for t in targets:
+                vm = multi_vm_runner.VMS[t["vm_idx"]]
+                th = threading.Thread(
+                    target=multi_vm_runner.inject_remote_kill,
+                    kwargs={
+                        "vm": vm,
+                        "container": t["containers"],
+                        "delay_s": delay_s,
+                    },
+                    daemon=True,
+                )
+                th.start()
+                threads.append(th)
+            for th in threads:
+                th.join()
+
+        failure_fn = _multi_vm_kill
 
     # Heterogeneous capacity: per-VM WORKER_PROCESSING_SPEED env var
     per_vm_env = None
