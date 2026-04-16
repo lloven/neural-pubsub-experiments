@@ -129,44 +129,76 @@ class TestRunAblationPhase:
         from scripts import run_ablation
         assert run_ablation is not None
 
-    def test_five_scenarios_defined(self):
-        """failure, sat-100, sat-150, sat-200, heterogeneous."""
+    def test_ten_scenarios_defined(self):
+        """3x2 failure factorial + 3 saturation + heterogeneous = 10."""
         from scripts.run_ablation import SCENARIOS
         assert set(SCENARIOS.keys()) == {
-            "failure", "sat-100", "sat-150", "sat-200", "heterogeneous",
+            "failure-50-12", "failure-100-12", "failure-150-12",
+            "failure-50-24", "failure-100-24", "failure-150-24",
+            "sat-100", "sat-150", "sat-200",
+            "heterogeneous",
         }
 
     def test_three_strategies_per_scenario(self):
         from scripts.run_ablation import STRATEGIES
         assert set(STRATEGIES) == {"oracle-global", "rr-global", "market-quad"}
 
-    def test_run_matrix_225_runs(self):
-        """5 scenarios x 3 strategies x 3 pipelines x 5 seeds = 225."""
+    def test_run_matrix_450_runs(self):
+        """10 scenarios x 3 strategies x 3 pipelines x 5 seeds = 450."""
         from scripts.run_ablation import build_run_matrix, STRATEGIES, SCENARIOS
         runs = build_run_matrix(
             scenarios=list(SCENARIOS),
             strategies=list(STRATEGIES),
             seeds=[42, 123, 456, 789, 0],
         )
-        assert len(runs) == 225
+        assert len(runs) == 450
 
-    def test_failure_scenario_has_failure_target(self):
+    def test_failure_scenarios_have_failure_target_or_targets(self):
         from scripts.run_ablation import SCENARIOS
-        assert SCENARIOS["failure"].get("failure_target") is not None
+        for name, scen in SCENARIOS.items():
+            if name.startswith("failure"):
+                assert (scen.get("failure_target") is not None
+                        or scen.get("failure_targets") is not None), (
+                    f"{name} must have failure_target or failure_targets"
+                )
 
-    def test_failure_scenario_kills_twelve_workers(self):
-        """25% capacity kill: 12 workers on VM2 (one full VM's worth)."""
-        from scripts.run_ablation import SCENARIOS
-        targets = SCENARIOS["failure"]["failure_target"]
-        assert isinstance(targets, list), "failure_target must be a list"
-        assert len(targets) == 12
+    def test_failure_scenarios_3x2_factorial(self):
+        """6 failure scenarios: 3 loads × 2 kill ratios.
 
-    def test_failure_scenario_uses_elevated_load(self):
-        """Failure at elevated load (50 pps) so remaining 36 workers
-        face real pressure after the 12-worker kill.
+        load: 50, 100, 150 pps
+        kill: 12 workers (VM2 only, 25% capacity) or 24 workers (VM1+VM2, 50%)
         """
         from scripts.run_ablation import SCENARIOS
-        assert SCENARIOS["failure"]["arrival_rate"] == 50.0
+        expected = {
+            "failure-50-12", "failure-100-12", "failure-150-12",
+            "failure-50-24", "failure-100-24", "failure-150-24",
+        }
+        actual_failure = {k for k in SCENARIOS if k.startswith("failure")}
+        assert actual_failure == expected, (
+            f"Expected {expected}, got {actual_failure}"
+        )
+
+    def test_failure_50_12_config(self):
+        from scripts.run_ablation import SCENARIOS
+        s = SCENARIOS["failure-50-12"]
+        assert s["arrival_rate"] == 50.0
+        # 12-worker kill is single-VM (failure_target list of containers)
+        assert isinstance(s["failure_target"], list)
+        assert len(s["failure_target"]) == 12
+
+    def test_failure_150_24_config(self):
+        from scripts.run_ablation import SCENARIOS
+        s = SCENARIOS["failure-150-24"]
+        assert s["arrival_rate"] == 150.0
+        # 24-worker kill spans two VMs — represented as list of (vm_idx, containers)
+        # OR as failure_targets (plural) with multiple entries.
+        assert "failure_targets" in s, (
+            "24-kill must use multi-VM failure_targets list"
+        )
+        targets = s["failure_targets"]
+        assert isinstance(targets, list)
+        total = sum(len(t["containers"]) for t in targets)
+        assert total == 24
 
     def test_saturation_sweep_covers_real_inflection_point(self):
         """Three saturation rates around the REAL ~200 pps inflection.
@@ -254,12 +286,20 @@ class TestRunAblationPhase:
         ratio is preserved when the run length is rescaled.
         """
         from scripts.run_ablation import SCENARIOS
-        scen = SCENARIOS["failure"]
+        # Check all failure scenarios use the same delay invariant.
+        for name, scen in SCENARIOS.items():
+            if not name.startswith("failure"):
+                continue
+            delay = scen["failure_delay_s"]
+            meas = scen["measurement_s"]
+            assert delay == meas // 2, (
+                f"{name}: failure_delay_s={delay} must equal "
+                f"measurement_s//2={meas // 2}"
+            )
+        # Use one scenario for the post-failure window check below
+        scen = SCENARIOS["failure-50-12"]
         delay = scen["failure_delay_s"]
         meas = scen["measurement_s"]
-        assert delay == meas // 2, (
-            f"failure_delay_s={delay} must equal measurement_s//2={meas // 2}"
-        )
         # Post-failure window must be at least 2 minutes
         assert meas - delay >= 120, (
             f"post-failure window {meas - delay}s < 120s is too short"
@@ -316,11 +356,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="failure",
+                scenario_name="failure-50-12",
                 strategy="rr-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=5.0,
+                arrival_rate=50.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -329,6 +369,26 @@ class TestFailureInjectionWiring:
             assert kwargs["failure_fn"] is not None, (
                 "failure scenario must pass a non-None failure_fn"
             )
+
+    def test_24_kill_scenario_kills_two_vms(self):
+        """failure-*-24 scenarios use multi-VM kill (VM1 + VM2)."""
+        from unittest.mock import patch
+        from scripts.run_ablation import _run_distributed, AblationRunConfig
+
+        with patch("scripts.multi_vm_runner.run_single") as mock_run:
+            run = AblationRunConfig(
+                scenario_name="failure-150-24",
+                strategy="market-quad",
+                pipeline_type="cqi_chain",
+                seed=42,
+                arrival_rate=150.0,
+                warmup_s=60,
+                measurement_s=180,
+            )
+            _run_distributed(run, dry_run=True)
+            _, kwargs = mock_run.call_args
+            # failure_fn should be a callable that triggers multi-VM kill
+            assert kwargs["failure_fn"] is not None
 
     def test_saturation_scenario_no_failure_fn(self):
         from unittest.mock import patch

@@ -143,7 +143,12 @@ EXPERIMENTS: dict[str, dict] = {
     },
     "ablation": {
         "description": "Stress scenarios where rr-global breaks down",
-        "configs": ["failure", "sat-100", "sat-150", "sat-200", "heterogeneous"],
+        "configs": [
+            "failure-50-12", "failure-100-12", "failure-150-12",
+            "failure-50-24", "failure-100-24", "failure-150-24",
+            "sat-100", "sat-150", "sat-200",
+            "heterogeneous",
+        ],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
@@ -202,10 +207,13 @@ HYPOTHESIS_MAP: dict[str, dict] = {
     # strategies compared within each scenario.
     "H-RR-RECOVER": {
         "phase": "ablation",
-        "configs": ["failure"],
+        "configs": [
+            "failure-50-12", "failure-100-12", "failure-150-12",
+            "failure-50-24", "failure-100-24", "failure-150-24",
+        ],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
-        "test": "kill 12/48 workers (25% capacity) at 50 pps, measure CR drop per strategy",
-        "theory": "Information completeness: prices encode worker availability",
+        "test": "3x2 factorial: load (50/100/150 pps) × kill ratio (12/24 workers); measure CR drop and latency divergence",
+        "theory": "Information completeness: prices encode worker availability; effect grows with stress (load × kill interaction)",
     },
     "H-RR-SATURATE": {
         "phase": "ablation",
