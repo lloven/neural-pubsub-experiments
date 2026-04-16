@@ -50,7 +50,7 @@ The manuscript (IEEE TNSE) uses a different hypothesis naming scheme. This table
 | H-FEDERATION | H5 | Federation (C) | C2, C3, C4 | 3x5 = 15 |
 | H-RESILIENCE | H6 | Resilience (D) | D1, D2 x {S1, S3} | 2x2x5 = 20 |
 | H-RR-RECOVER | -- | Ablation | failure scenario, oracle/rr/market x 3 pipelines | 3x3x5 = 45 |
-| H-RR-SATURATE | -- | Ablation | sat-20/25/30 x oracle/rr/market x 3 pipelines | 3x3x3x5 = 135 |
+| H-RR-SATURATE | -- | Ablation | sat-100/150/200 x oracle/rr/market x 3 pipelines | 3x3x3x5 = 135 |
 | H-RR-HETERO | -- | Ablation | heterogeneous scenario, oracle/rr/market x 3 pipelines | 3x3x5 = 45 |
 
 **Oracle-global deployment**: The oracle is a single centralised broker on VM1 with full global visibility and congestion-aware DP placement. All 48 workers (across 4 VMs) register with VM1's broker via `WORKER_BROKER_URL`. VM2-4 run workers only (no broker). The DP solver includes post-placement redistribution to avoid serialising concurrent fan-in stages. This is the theoretical upper bound.
@@ -59,7 +59,7 @@ The manuscript (IEEE TNSE) uses a different hypothesis naming scheme. This table
 
 **Overload argument (H-OVERLOAD)**: The theoretical oracle is omniscient with instant computation. The practical oracle is a single broker subject to queuing at high arrival rates. At high load (10 pps), the single-broker bottleneck causes the oracle to degrade while the market distributes placement across 4 brokers. The efficiency gap Delta_eff = 1 - eta_market/eta_oracle is expected to shrink (or invert) with increasing load. The load dimension (2, 5, 10 pps) in the 270-run allocation matrix captures this effect.
 
-**Ablation phase**: Five stress scenarios (failure, sat-20, sat-25, sat-30, heterogeneous) test the round-robin baseline's failure modes by isolating distinct Walrasian mechanisms (information completeness, admission control, price discovery). The saturation scenario is a 3-rate sweep around the empirically derived 25 pps inflection point so the rate dependence (not a single anecdotal datapoint) is characterised. The main allocation experiments use uniform conditions where rr-global is structurally hard to beat; the ablation introduces conditions that expose its limitations. Uses a separate compose file (`docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of the main worker) so the main campaign infrastructure is not modified during ablation runs. The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement`. The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection).
+**Ablation phase**: Ten stress scenarios test the round-robin baseline's failure modes by isolating distinct Walrasian mechanisms: information completeness (3×2 failure factorial: load × kill ratio), admission control (saturation sweep at 100/150/200 pps spanning the ~94% utilization point), and price discovery (heterogeneous worker speeds). The main allocation experiments use uniform conditions where rr-global is structurally hard to beat; the ablation introduces conditions that expose its limitations. Uses a separate compose file (`docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of the main worker) so the main campaign infrastructure is not modified during ablation runs. The ablation broker runs with `MARKET_LOAD_AWARE=true` and `DYNAMIC_BIDDING=true` env vars (load-aware worker selection + M/M/1 congestion pricing). The main campaign's compose file does NOT set these, preserving reproducibility of already-collected market runs.
 
 **Total Tier 2 runs**: 815 (270 allocation + 60 governance + 15 federation + 20 resilience + 450 ablation) = ~196 hours (market+governance ~80h at 14m/run measured, federation+resilience ~7h at 12m/run, ablation ~109h at 14m/run with the expanded 3x2 failure factorial + 3-rate saturation sweep).
 
@@ -313,9 +313,23 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 - Recovery timeline for E3/E4/E7/E8: detection_time, recovery_time, degradation_depth
 - Strategy effect size: S3 advantage over S1 at 10 pps vs 20 pps, with and without failure
 
+### Market mechanism implementation (ablation)
+
+The ablation tests the Walrasian market mechanism's three properties (information completeness, admission control, price discovery). Each property requires specific implementation components that emerged through iterative debugging on the cluster. The campaign-active configuration combines four feature-flagged components, none of which are active in the main market campaign (preserving its reproducibility):
+
+1. **Worker bid scaling** (`src/worker/worker.py:registration_payload`): each worker advertises `bid_cost_ms = base_cost × processing_speed` at registration. A worker with `processing_speed=2.0` (2× slower) bids 200ms; a `processing_speed=0.67` worker bids 67ms. **Why**: utilization-based pricing alone produces only ~2ms price gaps at low load (5 pps, 48 workers, ρ ≈ 1-3%) — far below the 50ms WAN cost needed for cross-domain trade. Encoding intrinsic worker properties in the bid produces 130ms+ gaps that drive routing decisions.
+
+2. **M/M/1 dynamic congestion pricing** (`_compute_clearing_prices_from`, feature flag `BrokerConfig.dynamic_bidding`, env var `DYNAMIC_BIDDING=true`): clearing price uses `cost = bid / (1 - utilization)`, capped at `util=0.99` to avoid divergence. This is the queueing-theoretic sojourn time under Poisson arrivals. At low utilization, cost ≈ bid; near capacity, cost diverges, providing natural admission control.
+
+3. **Federation price exchange** (`POST /federation/price-signal`, `_peer_prices` cache): each broker pushes its local clearing prices to all peers alongside the existing subscription summary propagation. At placement time, `_dispatch_placement_on` merges local + peer prices before invoking `market_mode_placement`. **Why**: without this, each federated broker only sees its own domain's prices, making `should_trade_cross_domain` blind to remote scarcity.
+
+4. **Oracle-mode market for ablation** (`STRATEGY_CONFIG["market-quad"]["oracle_mode"] = True`): the ablation runs market-quad as a single broker on VM1 with all 48 workers visible, isolating the **pricing mechanism** from **federation forwarding**. The H-RR-* hypotheses test the Walrasian properties (which prices); federation forwarding (which broker handles a request) is tested separately by H-FEDERATION. Combining both in market-quad ablation runs would conflate two independent mechanisms.
+
+See lessons L50 (image rebuild after worker-runtime changes), L51 (run_single failure must propagate), L52 (compose templates must be compatible across modules) in `Tasks/lessons.md`.
+
 ### Ablation: Stress scenarios where rr-global breaks down
 
-**Purpose:** Establish that the round-robin baseline's (rr-global) competitive performance in the main allocation experiments is conditional on uniform operating conditions (identical worker capacities, no failures, moderate arrival rates). Five stress scenarios introduce conditions absent from the main campaign and expose rr-global's failure modes. Each scenario isolates a distinct Walrasian mechanism that round-robin lacks by construction: information completeness (failure), admission control (saturation sweep), price discovery (heterogeneous capacities). Tests H-RR-RECOVER, H-RR-SATURATE, H-RR-HETERO.
+**Purpose:** Establish that the round-robin baseline's (rr-global) competitive performance in the main allocation experiments is conditional on uniform operating conditions (identical worker capacities, no failures, moderate arrival rates). Ten stress scenarios introduce conditions absent from the main campaign and expose rr-global's failure modes. Each scenario isolates a distinct Walrasian mechanism that round-robin lacks by construction: information completeness (failure factorial), admission control (saturation sweep), price discovery (heterogeneous capacities). Tests H-RR-RECOVER, H-RR-SATURATE, H-RR-HETERO.
 
 **Strategies:** 3 (oracle-global, rr-global, market-quad). The other heuristics (locality-only, latency-greedy, spillover) are excluded — the ablation is a focused comparison between the centralised baselines and the market mechanism.
 
@@ -336,11 +350,15 @@ Federation-level failures (broker kill, network partition) are tested in Federat
 
 **Total:** 10 scenarios × 3 strategies × 3 pipelines × 5 seeds = **450 runs (~109 hours at 14 min/run)**.
 
+**Factorial design rationale (H-RR-RECOVER):** the 3×2 design (3 loads × 2 kill ratios) decomposes the failure response into separable effects: load main effect (does the market's price-signal advantage grow with arrival rate?), kill-ratio main effect (does it grow with capacity loss?), and load×kill interaction (do the two stresses compound?). The earlier single-cell failure (5 pps + 1-worker kill) produced a null result because dispatch-time recovery handles trivial failures equally for all strategies — 2% capacity loss with 96% headroom never stresses the routing layer. The factorial isolates the regime where information completeness via prices actually matters: surviving workers near saturation, where every wasted retry cascades into queueing.
+
+**Saturation sweep rationale (H-RR-SATURATE):** initial sweep at 20/25/30 pps produced null results (100% CR, flat latency) because workers use asyncio-concurrent stage execution, giving the 48-worker testbed a real saturation point of ~200 pps (not the 25 pps estimated from sequential-worker assumptions). The rates were rescaled to 100/150/200 pps (~47%/70%/94% utilization) to span the actual inflection point.
+
 **Infrastructure separation:** The ablation uses a distinct compose file (`deploy/docker-compose.vm-ablation.yaml`) and worker module (`src.worker.ablation_worker`, a re-export of `src.worker.worker`) so the main campaign's compose stack and worker code are unchanged. The ablation infrastructure is wired through `multi_vm_runner.start_cluster`'s `compose_file` and `per_vm_env` parameters, which default to existing behaviour for the main campaign.
 
 **Market load-awareness flag:** The ablation broker runs with `--market-load-aware` (`BrokerConfig.market_load_aware=True`), enabling load-aware worker selection in `market_mode_placement` (picks the least-loaded feasible worker rather than the first feasible one). The main campaign's compose file does NOT set this flag, preserving reproducibility of already-collected market runs (which used the legacy first-feasible-worker selection). The fix is feature-flagged so the running campaign is undisturbed; see `EXPERIMENT-PLAN.md` "Resolved" section for the full discovery and reproducibility discussion.
 
-**Phase runner:** `scripts/run_ablation.py`. Standard CLI: `--configs failure,sat-20,sat-25,sat-30,heterogeneous`, `--strategies`, `--pipelines`, `--seeds`, `--resume`. Run via `python -m scripts.run_ablation --topology distributed --resume` after the main campaign completes.
+**Phase runner:** `scripts/run_ablation.py`. Standard CLI: `--configs failure-50-12,failure-100-12,failure-150-12,failure-50-24,failure-100-24,failure-150-24,sat-100,sat-150,sat-200,heterogeneous`, `--strategies`, `--pipelines`, `--seeds`, `--resume`. Run via `python -m scripts.run_ablation --topology distributed --resume` after the main campaign completes.
 
 **Expected outputs:**
 - Per-scenario CR and latency comparison across the 3 strategies
