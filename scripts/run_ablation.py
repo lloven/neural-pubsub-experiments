@@ -144,28 +144,50 @@ def _failure_scenario(load: float, kill_count: int) -> dict:
     return base
 
 
+# Scenario rates are calibrated against the 2026-04-18 saturation sweep
+# (results/calibration/SWEEP-RESULTS.md): oracle-global × cqi-chain × 48
+# workers saturates around 13.8 pps effective throughput, with the knee
+# sitting at 10-15 pps (CR 100% -> 80.7%, p99 1992 ms -> 14750 ms across
+# the 10 -> 15 pps step). Previous rates (50/100/150 and sat-100/150/200)
+# all sat in the complete-collapse regime and produced uninformative null
+# data post-L53 fix. Redesigned rates:
+#
+# Saturation sweep (H-RR-SATURATE): 5 / 10 / 15 pps spans below / at /
+# above the knee. sat-15 is where rr-global's unbounded queueing should
+# be visible and market-quad should start rejecting via congestion prices.
+#
+# Failure factorial (H-RR-RECOVER): 3 loads × 2 kill ratios, chosen so
+# surviving workers span sub-saturation to over-saturation.
+#   12-kill (36 surviving workers, ~10.4 pps capacity):
+#     5 pps =  48% util (sub-saturation baseline)
+#     8 pps =  77% util (near-saturation with failure)
+#    10 pps =  96% util (at-saturation with failure; key info-completeness cell)
+#   24-kill (24 surviving workers, ~6.9 pps capacity):
+#     5 pps =  72% util (near-saturation)
+#     8 pps = 116% util (over-saturation; key cell)
+#    10 pps = 145% util (severe over-saturation; market should reject via pricing)
 SCENARIOS: dict[str, dict] = {
-    "failure-50-12": _failure_scenario(50.0, 12),
-    "failure-100-12": _failure_scenario(100.0, 12),
-    "failure-150-12": _failure_scenario(150.0, 12),
-    "failure-50-24": _failure_scenario(50.0, 24),
-    "failure-100-24": _failure_scenario(100.0, 24),
-    "failure-150-24": _failure_scenario(150.0, 24),
-    "sat-100": {
-        "description": "Near-saturation (100 pps, ~47% util with 48 workers)",
-        "arrival_rate": 100.0,
+    "failure-5-12": _failure_scenario(5.0, 12),
+    "failure-8-12": _failure_scenario(8.0, 12),
+    "failure-10-12": _failure_scenario(10.0, 12),
+    "failure-5-24": _failure_scenario(5.0, 24),
+    "failure-8-24": _failure_scenario(8.0, 24),
+    "failure-10-24": _failure_scenario(10.0, 24),
+    "sat-5": {
+        "description": "Sub-saturation baseline (5 pps, ~36% util with 48 workers)",
+        "arrival_rate": 5.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
-    "sat-150": {
-        "description": "At-saturation (150 pps, ~70% util)",
-        "arrival_rate": 150.0,
+    "sat-10": {
+        "description": "At-saturation (10 pps, ~72% util, below knee)",
+        "arrival_rate": 10.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
-    "sat-200": {
-        "description": "Above-saturation (200 pps, ~94% util)",
-        "arrival_rate": 200.0,
+    "sat-15": {
+        "description": "Above-saturation (15 pps, ~109% util, past knee — p99 blow-up)",
+        "arrival_rate": 15.0,
         "warmup_s": _WARMUP_S,
         "measurement_s": _MEASUREMENT_S,
     },
