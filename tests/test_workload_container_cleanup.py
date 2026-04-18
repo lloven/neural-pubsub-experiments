@@ -31,6 +31,7 @@ class TestWorkloadContainerNamed:
         run_single(
             config="market-quad", seed=42,
             placement_mode="market", governance_config="all",
+            workload_env={"ARRIVAL_RATE": "5.0"},
             dry_run=True,
         )
         # Find the docker run call in dry-run output

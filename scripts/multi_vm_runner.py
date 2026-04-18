@@ -514,6 +514,53 @@ def collect_results(run_id: str, results_subdir: str = "market", dry_run: bool =
             )
 
 
+def _build_workload_cmd(
+    *,
+    run_id: str,
+    results_subdir: str,
+    seed: int,
+    warmup_s: int,
+    measurement_s: int,
+    workload_env: dict[str, str] | None,
+) -> str:
+    """Build the docker-run command for the workload generator.
+
+    ARRIVAL_RATE MUST be present in ``workload_env``; it is extracted and
+    passed as ``--arrival-rate`` on the generator CLI. The workload generator
+    (``src/workload/generator.py``) does NOT read ``ARRIVAL_RATE`` from env,
+    so leaving it as an env var silently defaults arrival rate to 1.0 pps
+    (bug discovered 2026-04-18; see L53 in Tasks/lessons.md).
+
+    Other entries in ``workload_env`` (``PIPELINE_TYPE``, ``FUNNEL_MODE``,
+    ``PIPELINE_MIX_*``) ARE consumed by the generator through ``os.environ``
+    and are passed through as ``-e`` Docker flags.
+    """
+    env = dict(workload_env or {})
+    if "ARRIVAL_RATE" not in env:
+        raise ValueError(
+            "workload_env must contain ARRIVAL_RATE; "
+            "silent defaulting to 1.0 pps was the 2026-04-18 bug (L53)."
+        )
+    arrival_rate = env.pop("ARRIVAL_RATE")
+    env_flags = "".join(f"-e {k}={v} " for k, v in env.items())
+    return (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"mkdir -p results/{results_subdir} && "
+        f"docker run --rm --name npubsub-workload --network=host --user $(id -u):$(id -g) "
+        f"--entrypoint python3 "
+        f"{env_flags}"
+        f"-v $PWD/results:/results "
+        f"neural-pubsub:latest "
+        f"-m src.workload.generator "
+        f"--broker-url http://localhost:8080 "
+        f"--seed {seed} "
+        f"--warmup {warmup_s} "
+        f"--duration {warmup_s + measurement_s} "
+        f"--arrival-rate {arrival_rate} "
+        f"--result-file /results/{results_subdir}/{run_id}.csv"
+    )
+
+
 def run_single(
     config: str,
     seed: int,
@@ -569,24 +616,13 @@ def run_single(
         t.start()
 
     # 5. Start workload on VM1 via Docker (blocks until done)
-    env_flags = ""
-    if workload_env:
-        env_flags = " ".join(f"-e {k}={v}" for k, v in workload_env.items()) + " "
-
-    workload_cmd = (
-        f"cd {REMOTE_PROJECT_DIR} && "
-        f"mkdir -p results/{results_subdir} && "
-        f"docker run --rm --name npubsub-workload --network=host --user $(id -u):$(id -g) "
-        f"--entrypoint python3 "
-        f"{env_flags}"
-        f"-v $PWD/results:/results "
-        f"neural-pubsub:latest "
-        f"-m src.workload.generator "
-        f"--broker-url http://localhost:8080 "
-        f"--seed {seed} "
-        f"--warmup {warmup_s} "
-        f"--duration {warmup_s + measurement_s} "
-        f"--result-file /results/{results_subdir}/{run_id}.csv"
+    workload_cmd = _build_workload_cmd(
+        run_id=run_id,
+        results_subdir=results_subdir,
+        seed=seed,
+        warmup_s=warmup_s,
+        measurement_s=measurement_s,
+        workload_env=workload_env,
     )
     _exec(VMS[0], workload_cmd, dry_run=dry_run, timeout=warmup_s + measurement_s + 120)
 

@@ -46,6 +46,7 @@ class TestRunIdDuplication:
             governance_config="none",
             run_id="neural_http_rate-medium_seed-42",
             results_subdir="baseline",
+            workload_env={"ARRIVAL_RATE": "5.0"},
             dry_run=True,
         )
         calls = " ".join(str(c) for c in mock_ssh.call_args_list)
@@ -71,6 +72,7 @@ class TestRunIdDuplication:
             placement_mode="market",
             governance_config="all",
             results_subdir="market",
+            workload_env={"ARRIVAL_RATE": "5.0"},
             dry_run=True,
         )
         calls = " ".join(str(c) for c in mock_ssh.call_args_list)

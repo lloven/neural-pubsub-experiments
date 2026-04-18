@@ -192,6 +192,7 @@ class TestFunctionsUseExec:
         mock_exec.return_value = ""
         run_single(config="test", seed=42, placement_mode="neural",
                    governance_config="all", warmup_s=10, measurement_s=10,
+                   workload_env={"ARRIVAL_RATE": "5.0"},
                    dry_run=True)
         # The workload command should go through _exec(VMS[0], ...)
         # not _ssh(VMS[0].ssh_host, ...)
