@@ -16,15 +16,19 @@ New entries at top of the appropriate date section. Timestamps in EEST (cluster 
 
 ## 2026-04-18
 
-- **TBD** Relaunched ablation campaign in tmux `campaign`. Verified first run's CSV row count matches nominal rate.
-- **TBD** Remote smoke PASS: 1 ablation cell at 50 pps × 60s measurement → ~3000 CSV rows (vs ~60 under bug). `--arrival-rate` now honored.
-- **TBD** `deploy_code()` + `docker build` ×4 VMs (commit TBD).
-- **TBD** Archived stale results to `results/_archive_1pps_bug_20260418/` on VM1 (ablation/baseline/market/resilience/stress/slicing/federation/contention). All distributed runs affected by L53 bug; re-collection required.
-- **08:05** `multi_vm_runner --stop` cleaned VM1–4 compose stacks.
-- **08:00** Stopped ongoing ablation (244/450) via SIGINT to tmux `campaign`.
-- **~07:40** **Discovery — L53 bug**: `multi_vm_runner.run_single` set `-e ARRIVAL_RATE=<rate>` but `src/workload/generator.py` only reads `--arrival-rate` CLI (default 1.0). Every distributed run across every phase (baseline, slicing, resilience, stress, market, ablation) ran at actual 1.0 pps regardless of configured load. Detected via identical cell pipeline counts (~821/seed/600s = 1.37 pps) across failure-50-12, failure-100-12, failure-150-12, failure-50-24 — load doubling had no effect on p95 latency because load wasn't actually scaling.
-- **~07:30** Comparison of failure-150-12 (15/15 cells) against failure-50-12 showed identical distributions: hypothesis-design anomaly prompting deeper investigation.
-- **Fix** (same day): extracted `_build_workload_cmd()` in `multi_vm_runner.py`. ARRIVAL_RATE now passed as `--arrival-rate <rate>` CLI arg and stripped from env flags. TDD: 6 new tests in `tests/test_arrival_rate_plumbing.py`, 5 existing tests updated to pass ARRIVAL_RATE. Also fixed `run_slicing.py` which was missing ARRIVAL_RATE from its distributed workload_env. 1142 tests passing.
+- **09:44** Relaunched ablation campaign in tmux `campaign` (commit bb59752). First run `failure-5-12_oracle-global_cqi-chain_seed-42` at `--arrival-rate 5.0` → confirmed new rates honored. ETA 450 runs × 14 min ≈ 105h.
+- **~09:43** Archived stale results on VM1 to `results/_archive_1pps_bug_20260418/` (ablation/baseline/market/resilience/stress/slicing ≈ 380 MB of pre-fix data; all invalid due to L53 bug).
+- **09:40** Smoke PASS: sat-10 cell (10 pps × 60s) → 835 pipelines, 100% CR, matches 2026-04-18 calibration.
+- **~09:30** Redesigned ablation scenarios around calibrated knee (commit bb59752). Replaces failure-{50,100,150}-{12,24} with failure-{5,8,10}-{12,24} and sat-{100,150,200} with sat-{5,10,15}. Updates tests + EXPERIMENT.md + manuscript Evaluation.tex.
+- **09:21–09:32** Saturation calibration sweep on VM1. Result: knee at 10–15 pps (CR 100%→80.7%, p99 1992→14750 ms), effective saturation ~13.8 pps. Pre-fix theoretical estimate of ~200 pps was off by a factor of 14. Results saved to `results/calibration/SWEEP-RESULTS.md`.
+- **~09:15** `deploy_code()` + `docker build` on VM2–VM4 (commit a7b88f2). Verified `--arrival-rate` in generator CLI help across all 4 images.
+- **~09:00** `./run-experiments.sh --remote sync` → `git reset --hard origin/main` + `docker build` on VM1 (commit a7b88f2).
+- **~08:30** Committed L53 fix + calibration script (commits a7b88f2, f5ce4ff). 1142 tests pass. Added TDD tests in `tests/test_arrival_rate_plumbing.py`.
+- **08:05** `multi_vm_runner --stop` cleaned VM1–VM4 compose stacks.
+- **08:00** Stopped ongoing ablation (244/450 completed under bug) via SIGINT to tmux `campaign`.
+- **~07:40** **Discovery — L53 bug**: `multi_vm_runner.run_single` set `-e ARRIVAL_RATE=<rate>` but `src/workload/generator.py` only reads `--arrival-rate` CLI (default 1.0). Every distributed run across every phase ran at actual 1.0 pps regardless of configured load. Detected via identical cell pipeline counts (~821/seed/600s = 1.37 pps) across failure-50-12, failure-100-12, failure-150-12, failure-50-24 — load doubling had no effect because load wasn't actually scaling.
+- **~07:30** Comparison of failure-150-12 against failure-50-12 showed identical distributions, prompting deeper investigation that uncovered L53.
+- **Fix** (same day): extracted `_build_workload_cmd()` helper. ARRIVAL_RATE now passed as `--arrival-rate <rate>` CLI arg. Also fixed `run_slicing.py` missing ARRIVAL_RATE in distributed workload_env. Lesson L53 added.
 
 ## 2026-04-16
 
