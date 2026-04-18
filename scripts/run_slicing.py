@@ -140,6 +140,7 @@ def _run_distributed(run: RunConfig, dry_run: bool) -> dict:
         broker_module=cmap["env"].get("BROKER_MODULE"),
         placement=cmap["env"].get("PLACEMENT") if cmap["env"].get("BROKER_MODULE") else None,
         workload_env={
+            "ARRIVAL_RATE": str(DEFAULT_RATE_VALUE),
             "PIPELINE_MIX_CQI": str(COMPLEXITY_MIX["cqi_prediction"]),
             "PIPELINE_MIX_ANOMALY": str(COMPLEXITY_MIX["anomaly_detection"]),
             "PIPELINE_MIX_FUSION": str(COMPLEXITY_MIX["sensor_fusion"]),

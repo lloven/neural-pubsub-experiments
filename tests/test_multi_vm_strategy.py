@@ -121,6 +121,7 @@ def test_run_single_results_subdir(mock_ssh, mock_start, mock_stop,
         placement_mode="neural",
         governance_config="none",
         results_subdir="baseline",
+        workload_env={"ARRIVAL_RATE": "5.0"},
         dry_run=True,
     )
     # The workload command should reference results/baseline/
@@ -145,7 +146,7 @@ def test_run_single_passes_workload_env(mock_ssh, mock_start, mock_stop,
         seed=42,
         placement_mode="neural",
         governance_config="none",
-        workload_env={"PIPELINE_MIX_CQI": "0.5", "PIPELINE_MIX_ANOMALY": "0.5"},
+        workload_env={"ARRIVAL_RATE": "5.0", "PIPELINE_MIX_CQI": "0.5", "PIPELINE_MIX_ANOMALY": "0.5"},
         dry_run=True,
     )
     calls = [str(c) for c in mock_ssh.call_args_list]

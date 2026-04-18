@@ -136,6 +136,7 @@ class TestRunSingleOracleMode:
         run_single(
             config="oracle-global", seed=42,
             placement_mode="neural", governance_config="all",
+            workload_env={"ARRIVAL_RATE": "5.0"},
             oracle_mode=True, dry_run=True,
         )
         mock_start.assert_called_once()

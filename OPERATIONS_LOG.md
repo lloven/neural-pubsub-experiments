@@ -14,6 +14,18 @@ New entries at top of the appropriate date section. Timestamps in EEST (cluster 
 
 ---
 
+## 2026-04-18
+
+- **TBD** Relaunched ablation campaign in tmux `campaign`. Verified first run's CSV row count matches nominal rate.
+- **TBD** Remote smoke PASS: 1 ablation cell at 50 pps × 60s measurement → ~3000 CSV rows (vs ~60 under bug). `--arrival-rate` now honored.
+- **TBD** `deploy_code()` + `docker build` ×4 VMs (commit TBD).
+- **TBD** Archived stale results to `results/_archive_1pps_bug_20260418/` on VM1 (ablation/baseline/market/resilience/stress/slicing/federation/contention). All distributed runs affected by L53 bug; re-collection required.
+- **08:05** `multi_vm_runner --stop` cleaned VM1–4 compose stacks.
+- **08:00** Stopped ongoing ablation (244/450) via SIGINT to tmux `campaign`.
+- **~07:40** **Discovery — L53 bug**: `multi_vm_runner.run_single` set `-e ARRIVAL_RATE=<rate>` but `src/workload/generator.py` only reads `--arrival-rate` CLI (default 1.0). Every distributed run across every phase (baseline, slicing, resilience, stress, market, ablation) ran at actual 1.0 pps regardless of configured load. Detected via identical cell pipeline counts (~821/seed/600s = 1.37 pps) across failure-50-12, failure-100-12, failure-150-12, failure-50-24 — load doubling had no effect on p95 latency because load wasn't actually scaling.
+- **~07:30** Comparison of failure-150-12 (15/15 cells) against failure-50-12 showed identical distributions: hypothesis-design anomaly prompting deeper investigation.
+- **Fix** (same day): extracted `_build_workload_cmd()` in `multi_vm_runner.py`. ARRIVAL_RATE now passed as `--arrival-rate <rate>` CLI arg and stripped from env flags. TDD: 6 new tests in `tests/test_arrival_rate_plumbing.py`, 5 existing tests updated to pass ARRIVAL_RATE. Also fixed `run_slicing.py` which was missing ARRIVAL_RATE from its distributed workload_env. 1142 tests passing.
+
 ## 2026-04-16
 
 - **13:52** Launched 450-run ablation campaign on VM1 tmux `campaign`. `--resume` picks up 71 existing (26 failure-50-12 + 45 heterogeneous). ETA ~91h.
