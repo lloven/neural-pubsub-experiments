@@ -4,7 +4,7 @@ The ablation experiment introduces five scenarios that stress the
 strategies in ways the main campaign does not:
 
 1. Worker failure during measurement (information completeness)
-2. Saturation arrival-rate sweep at 20/25/30 pps (admission control)
+2. Saturation arrival-rate sweep at 5/10/15 pps (admission control)
 3. Heterogeneous worker capacities via processing_speed (price discovery)
 
 This module provides:
@@ -130,12 +130,16 @@ class TestRunAblationPhase:
         assert run_ablation is not None
 
     def test_ten_scenarios_defined(self):
-        """3x2 failure factorial + 3 saturation + heterogeneous = 10."""
+        """3x2 failure factorial + 3 saturation + heterogeneous = 10.
+
+        Rates calibrated post-L53 bugfix (2026-04-18): saturation of
+        oracle-global × cqi-chain × 48 workers lives near 13.8 pps.
+        """
         from scripts.run_ablation import SCENARIOS
         assert set(SCENARIOS.keys()) == {
-            "failure-50-12", "failure-100-12", "failure-150-12",
-            "failure-50-24", "failure-100-24", "failure-150-24",
-            "sat-100", "sat-150", "sat-200",
+            "failure-5-12", "failure-8-12", "failure-10-12",
+            "failure-5-24", "failure-8-24", "failure-10-24",
+            "sat-5", "sat-10", "sat-15",
             "heterogeneous",
         }
 
@@ -165,33 +169,32 @@ class TestRunAblationPhase:
     def test_failure_scenarios_3x2_factorial(self):
         """6 failure scenarios: 3 loads × 2 kill ratios.
 
-        load: 50, 100, 150 pps
+        load: 5, 8, 10 pps (calibrated against 2026-04-18 saturation sweep)
         kill: 12 workers (VM2 only, 25% capacity) or 24 workers (VM1+VM2, 50%)
         """
         from scripts.run_ablation import SCENARIOS
         expected = {
-            "failure-50-12", "failure-100-12", "failure-150-12",
-            "failure-50-24", "failure-100-24", "failure-150-24",
+            "failure-5-12", "failure-8-12", "failure-10-12",
+            "failure-5-24", "failure-8-24", "failure-10-24",
         }
         actual_failure = {k for k in SCENARIOS if k.startswith("failure")}
         assert actual_failure == expected, (
             f"Expected {expected}, got {actual_failure}"
         )
 
-    def test_failure_50_12_config(self):
+    def test_failure_5_12_config(self):
         from scripts.run_ablation import SCENARIOS
-        s = SCENARIOS["failure-50-12"]
-        assert s["arrival_rate"] == 50.0
+        s = SCENARIOS["failure-5-12"]
+        assert s["arrival_rate"] == 5.0
         # 12-worker kill is single-VM (failure_target list of containers)
         assert isinstance(s["failure_target"], list)
         assert len(s["failure_target"]) == 12
 
-    def test_failure_150_24_config(self):
+    def test_failure_10_24_config(self):
         from scripts.run_ablation import SCENARIOS
-        s = SCENARIOS["failure-150-24"]
-        assert s["arrival_rate"] == 150.0
+        s = SCENARIOS["failure-10-24"]
+        assert s["arrival_rate"] == 10.0
         # 24-worker kill spans two VMs — represented as list of (vm_idx, containers)
-        # OR as failure_targets (plural) with multiple entries.
         assert "failure_targets" in s, (
             "24-kill must use multi-VM failure_targets list"
         )
@@ -200,18 +203,18 @@ class TestRunAblationPhase:
         total = sum(len(t["containers"]) for t in targets)
         assert total == 24
 
-    def test_saturation_sweep_covers_real_inflection_point(self):
-        """Three saturation rates around the REAL ~200 pps inflection.
+    def test_saturation_sweep_spans_calibrated_knee(self):
+        """Three saturation rates spanning the calibrated knee at 10-15 pps.
 
-        The original 20/25/30 pps sweep produced null results because
-        workers use asyncio-concurrent execution, giving ~10x more
-        throughput than the sequential estimate. Actual saturation is
-        ~200 pps for 48 workers with 8-stage pipelines.
+        The 2026-04-18 saturation sweep (results/calibration/SWEEP-RESULTS.md)
+        showed CR 100% at 10 pps, CR 80.7% at 15 pps with p99 jumping from
+        1992 ms to 14750 ms. Effective saturation is ~13.8 pps, not the
+        pre-fix theoretical ~200 pps.
         """
         from scripts.run_ablation import SCENARIOS
-        assert SCENARIOS["sat-100"]["arrival_rate"] == 100.0
-        assert SCENARIOS["sat-150"]["arrival_rate"] == 150.0
-        assert SCENARIOS["sat-200"]["arrival_rate"] == 200.0
+        assert SCENARIOS["sat-5"]["arrival_rate"] == 5.0
+        assert SCENARIOS["sat-10"]["arrival_rate"] == 10.0
+        assert SCENARIOS["sat-15"]["arrival_rate"] == 15.0
 
     def test_heterogeneous_scenario_has_speed_factors(self):
         from scripts.run_ablation import SCENARIOS
@@ -297,7 +300,7 @@ class TestRunAblationPhase:
                 f"measurement_s//2={meas // 2}"
             )
         # Use one scenario for the post-failure window check below
-        scen = SCENARIOS["failure-50-12"]
+        scen = SCENARIOS["failure-5-12"]
         delay = scen["failure_delay_s"]
         meas = scen["measurement_s"]
         # Post-failure window must be at least 2 minutes
@@ -356,11 +359,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="failure-50-12",
+                scenario_name="failure-5-12",
                 strategy="rr-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=50.0,
+                arrival_rate=5.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -377,11 +380,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="failure-150-24",
+                scenario_name="failure-10-24",
                 strategy="market-quad",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -396,11 +399,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="sat-150",
+                scenario_name="sat-10",
                 strategy="rr-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -437,11 +440,11 @@ class TestFailureInjectionWiring:
 
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             run = AblationRunConfig(
-                scenario_name="sat-150",
+                scenario_name="sat-10",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=60,
                 measurement_s=180,
             )
@@ -469,11 +472,11 @@ class TestFailurePropagation:
                 "error": "federation_timeout",
             }
             run = AblationRunConfig(
-                scenario_name="sat-150",
+                scenario_name="sat-10",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=240,
                 measurement_s=600,
             )
@@ -490,11 +493,11 @@ class TestFailurePropagation:
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             mock_run.return_value = {"run_id": "test", "status": "completed"}
             run = AblationRunConfig(
-                scenario_name="sat-150",
+                scenario_name="sat-10",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=240,
                 measurement_s=600,
             )
@@ -508,11 +511,11 @@ class TestFailurePropagation:
         with patch("scripts.multi_vm_runner.run_single") as mock_run:
             mock_run.return_value = None  # dry-run returns None
             run = AblationRunConfig(
-                scenario_name="sat-150",
+                scenario_name="sat-10",
                 strategy="oracle-global",
                 pipeline_type="cqi_chain",
                 seed=42,
-                arrival_rate=150.0,
+                arrival_rate=10.0,
                 warmup_s=240,
                 measurement_s=600,
             )

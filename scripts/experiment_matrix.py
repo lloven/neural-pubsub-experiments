@@ -144,9 +144,9 @@ EXPERIMENTS: dict[str, dict] = {
     "ablation": {
         "description": "Stress scenarios where rr-global breaks down",
         "configs": [
-            "failure-50-12", "failure-100-12", "failure-150-12",
-            "failure-50-24", "failure-100-24", "failure-150-24",
-            "sat-100", "sat-150", "sat-200",
+            "failure-5-12", "failure-8-12", "failure-10-12",
+            "failure-5-24", "failure-8-24", "failure-10-24",
+            "sat-5", "sat-10", "sat-15",
             "heterogeneous",
         ],
         "seeds": DEFAULT_SEEDS,
@@ -159,18 +159,23 @@ EXPERIMENTS: dict[str, dict] = {
         # same constants as EXPERIMENTS["market"]; do not override.
         "warmup_s": MAIN_CAMPAIGN_WARMUP_S,
         "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
-        # 5 scenarios x 3 strategies x 3 pipelines x 5 seeds = 225
+        # 10 scenarios x 3 strategies x 3 pipelines x 5 seeds = 450
         "notes": (
-            "Tier 2c ablation. Tests H-RR-RECOVER (12-worker kill at 50 pps), "
-            "H-RR-SATURATE (saturation sweep 100/150/200 pps), "
-            "H-RR-HETERO (edge 2x slower / cloud 1.5x faster). Uses "
-            "docker-compose.vm-ablation.yaml and src.worker.ablation_worker "
-            "(re-export of src.worker.worker) so the main campaign "
-            "infrastructure is unchanged. Broker runs with "
-            "MARKET_LOAD_AWARE=true and DYNAMIC_BIDDING=true env vars "
-            "(load-aware worker selection + M/M/1 congestion pricing). "
-            "Run length is identical to the main market campaign for "
-            "direct cross-phase comparability."
+            "Tier 2c ablation. Tests H-RR-RECOVER (3×2 factorial: "
+            "load 5/8/10 pps × kill 12/24 workers), H-RR-SATURATE "
+            "(rate sweep 5/10/15 pps spanning the knee), H-RR-HETERO "
+            "(edge 2x slower / cloud 1.5x faster at 5 pps). Rates were "
+            "calibrated against the 2026-04-18 saturation sweep "
+            "(results/calibration/SWEEP-RESULTS.md): oracle-global × "
+            "cqi-chain × 48 workers saturates at ~13.8 pps effective "
+            "throughput; the knee sits at 10-15 pps (CR 100%→80.7%, "
+            "p99 2s→15s across the 10→15 pps step). Previous rates "
+            "(50/100/150 pps and 100/150/200 pps) all sat in the "
+            "complete-collapse regime. Uses docker-compose.vm-ablation.yaml "
+            "and src.worker.ablation_worker so the main campaign is "
+            "unchanged. Broker runs with MARKET_LOAD_AWARE=true and "
+            "DYNAMIC_BIDDING=true env vars. Run length matches main "
+            "market campaign for cross-phase comparability."
         ),
     },
 }
@@ -208,19 +213,19 @@ HYPOTHESIS_MAP: dict[str, dict] = {
     "H-RR-RECOVER": {
         "phase": "ablation",
         "configs": [
-            "failure-50-12", "failure-100-12", "failure-150-12",
-            "failure-50-24", "failure-100-24", "failure-150-24",
+            "failure-5-12", "failure-8-12", "failure-10-12",
+            "failure-5-24", "failure-8-24", "failure-10-24",
         ],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
-        "test": "3x2 factorial: load (50/100/150 pps) × kill ratio (12/24 workers); measure CR drop and latency divergence",
-        "theory": "Information completeness: prices encode worker availability; effect grows with stress (load × kill interaction)",
+        "test": "3x2 factorial: load (5/8/10 pps) × kill ratio (12/24 workers); measure CR drop and latency divergence",
+        "theory": "Information completeness: prices encode worker availability; effect grows with stress (load × kill interaction). Loads chosen so survivors span sub-saturation (5 pps, 12-kill) to severe over-saturation (10 pps, 24-kill).",
     },
     "H-RR-SATURATE": {
         "phase": "ablation",
-        "configs": ["sat-100", "sat-150", "sat-200"],
+        "configs": ["sat-5", "sat-10", "sat-15"],
         "strategies": ["oracle-global", "rr-global", "market-quad"],
-        "test": "rate sweep 100/150/200 pps (47%/70%/94% util), measure tail latency divergence",
-        "theory": "Walrasian admission control: prices clear excess demand",
+        "test": "rate sweep 5/10/15 pps spans below / at / above the knee (calibrated at ~13.8 pps throughput)",
+        "theory": "Walrasian admission control: prices clear excess demand at 15 pps; rr-global queues unboundedly while market-quad rejects via congestion pricing",
     },
     "H-RR-HETERO": {
         "phase": "ablation",
