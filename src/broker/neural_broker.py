@@ -645,16 +645,34 @@ class NeuralBroker:
 
             dead_workers: list[str] = []
 
-            async def _probe(nid: str, w: WorkerInfo) -> tuple[str, bool]:
-                """Probe a single worker; return (node_id, healthy)."""
+            async def _probe(nid: str, w: WorkerInfo) -> tuple[str, bool, float | None]:
+                """Probe a single worker; return (node_id, healthy, reported_load).
+
+                The HealthModel response body carries the worker's
+                instantaneous current_load (worker.py:333-342). Parsing it
+                here lets the broker's M/M/1 pricing (which reads
+                ``WorkerInfo.current_load``) reflect real worker state
+                rather than a local dispatch/completion estimate. Without
+                this sync the price signal lags actual load by 5+ seconds
+                at 15 pps arrival, defeating admission control
+                (see L53/sat-15 discovery, 2026-04-22).
+                """
                 try:
                     resp = await self._http_client.get(
                         f"{w.url.rstrip('/')}/health", timeout=2.0
                     )
                     resp.raise_for_status()
-                    return nid, True
+                    reported_load: float | None = None
+                    try:
+                        body = resp.json()
+                        if isinstance(body, dict) and "current_load" in body:
+                            reported_load = float(body["current_load"])
+                    except Exception:
+                        # Tolerate malformed/empty body; health is still green.
+                        reported_load = None
+                    return nid, True, reported_load
                 except Exception:
-                    return nid, False
+                    return nid, False, None
 
             # --- Concurrent health probes ---
             # All registered workers are probed in parallel via
@@ -665,15 +683,21 @@ class NeuralBroker:
                 *(_probe(nid, w) for nid, w in workers_snapshot.items())
             )
 
-            # --- Consecutive-failure tracking ---
-            # A successful probe resets the failure counter to zero.  Each
-            # failed probe increments the counter.  Once a worker reaches
-            # `max_failures` consecutive failures it is declared dead.
-            # Using a consecutive (not cumulative) counter avoids false
-            # positives from transient network blips.
-            for node_id, healthy in results:
+            # --- Consecutive-failure tracking + load sync ---
+            # A successful probe resets the failure counter to zero and
+            # synchronises the worker's reported current_load into the
+            # registry. Each failed probe increments the counter. Once a
+            # worker reaches ``max_failures`` consecutive failures it is
+            # declared dead. Using a consecutive (not cumulative) counter
+            # avoids false positives from transient network blips.
+            for node_id, healthy, reported_load in results:
                 if healthy:
                     self._worker_failures.pop(node_id, None)
+                    if reported_load is not None:
+                        async with self._workers_lock:
+                            w = self._workers.get(node_id)
+                            if w is not None:
+                                w.current_load = reported_load
                 else:
                     count = self._worker_failures.get(node_id, 0) + 1
                     self._worker_failures[node_id] = count
