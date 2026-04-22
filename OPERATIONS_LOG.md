@@ -14,6 +14,17 @@ New entries at top of the appropriate date section. Timestamps in EEST (cluster 
 
 ---
 
+## 2026-04-22
+
+- **10:55** Launched `followup` tmux session on VM1: waits for current `campaign` to exit, then runs `run_ablation --resume` (105 extras) + `run_all_post_ablation.sh`. Orchestration script: `scripts/run_followup_post_fix.sh` (commit 9dce28e).
+- **10:50** Archived and re-queued 105 market-quad cells to be re-run with post-fix code: 15 sat-10 cells + 90 failure cells (6 scenarios × 3 pipelines × 5 seeds). Pre-fix CSVs moved to `results/_archive_doublebooking_bug/`. `.progress.json` backed up to `.bak_20260422b`. Rationale: consistency — the ablation's H-RR-SATURATE saturation sweep and H-RR-RECOVER failure factorial should both be on post-fix market code for publication.
+- **10:45** Manuscript updates: `DistributionArch.tex` + 2 new paragraphs (within-round reservation, health-check load sync); `Evaluation.tex` hypothesis table rates `{5,8,10}/{5,10,15}` pps; `Discussion.tex` + implementation-refinements paragraph; rate references in Discussion theory paragraph updated `{100,150,200}` → `{5,10,15}` pps.
+- **10:33** Relaunched `campaign` tmux with `run_ablation --topology distributed --resume` (post-fix code, rebuilt images). sat-15 cells start from scratch (archived pre-fix CSVs on VM1).
+- **10:30** `deploy_code()` + `docker build` on VM2–VM4; VM1 rebuild finished at 10:40 (commit 92bab8f).
+- **10:20** Committed 2 bug fixes (commit 92bab8f): (1) `market_mode_placement` within-round `additional_load` ledger mirroring oracle's `_greedy_placement`; (2) `_health_check_loop` parses `HealthModel.current_load` on every successful probe. 8 new TDD tests, 1150 total passing.
+- **~10:00** **Discovery — two market-mechanism bugs found via code-analysis agents**: (1) within-round double-booking (no additional_load ledger), (2) stale health-check utilisation (response body discarded). Both bugs explain why market-quad underperformed oracle-global at sat-15 (CR 71.8% vs 82.9%) despite matching oracle at failure cells.
+- **10:15** Stopped current campaign mid sat-15 market block via SIGINT + `multi_vm_runner --stop`.
+
 ## 2026-04-18
 
 - **09:44** Relaunched ablation campaign in tmux `campaign` (commit bb59752). First run `failure-5-12_oracle-global_cqi-chain_seed-42` at `--arrival-rate 5.0` → confirmed new rates honored. ETA 450 runs × 14 min ≈ 105h.
