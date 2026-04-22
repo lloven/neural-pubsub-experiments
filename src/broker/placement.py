@@ -453,6 +453,19 @@ def market_mode_placement(
 
     placement: dict[str, str] = {}
     total_cost = 0.0
+    # Cumulative load committed within this placement round. Mirrors the
+    # ``additional_load`` ledger used by ``_greedy_placement``. Prevents
+    # double-booking a worker across multiple stages of the same pipeline,
+    # which caused market-quad to underperform oracle-global at sat-15 where
+    # multi-stage pipelines would otherwise all land on the same cheapest
+    # worker (2026-04-22). See tests/test_market_within_round_load.py.
+    additional_load: dict[str, float] = {}
+
+    def _effective_residual(worker: ExecutionUnit) -> float:
+        return worker.residual_capacity - additional_load.get(worker.node_id, 0.0)
+
+    def _effective_current_load(worker: ExecutionUnit) -> float:
+        return worker.current_load + additional_load.get(worker.node_id, 0.0)
 
     # Group workers by domain for quick lookup
     domain_workers: dict[str, list[ExecutionUnit]] = {}
@@ -485,40 +498,49 @@ def market_mode_placement(
 
         total_cost += stage_cost
 
-        # Pick a worker from the chosen domain
+        # Pick a worker from the chosen domain — feasibility net of load
+        # committed earlier in this same placement round.
         workers = domain_workers.get(chosen_domain, [])
         candidates = [
             w for w in workers
-            if w.residual_capacity >= stage.computational_demand
+            if _effective_residual(w) >= stage.computational_demand
         ]
         placed = False
         if candidates:
             if load_aware:
                 # Walrasian price discovery: scarce workers accumulate
                 # load and become "expensive" via reduced residual
-                # capacity. Picking the least-loaded worker realises
-                # this preference.
-                chosen = min(candidates, key=lambda w: w.current_load)
+                # capacity. Picking the least-loaded worker (after
+                # within-round commitments) realises this preference.
+                chosen = min(candidates, key=_effective_current_load)
             else:
                 # Legacy: first feasible worker in iteration order.
                 # Preserves the main campaign market runs which were
                 # collected before this flag existed.
                 chosen = candidates[0]
             placement[stage.id] = chosen.node_id
+            additional_load[chosen.node_id] = (
+                additional_load.get(chosen.node_id, 0.0)
+                + stage.computational_demand
+            )
             placed = True
 
         if not placed:
             # No available worker in chosen domain → try local fallback
             fallback = [
                 w for w in domain_workers.get(local_domain, [])
-                if w.residual_capacity >= stage.computational_demand
+                if _effective_residual(w) >= stage.computational_demand
             ]
             if fallback:
                 if load_aware:
-                    chosen = min(fallback, key=lambda w: w.current_load)
+                    chosen = min(fallback, key=_effective_current_load)
                 else:
                     chosen = fallback[0]
                 placement[stage.id] = chosen.node_id
+                additional_load[chosen.node_id] = (
+                    additional_load.get(chosen.node_id, 0.0)
+                    + stage.computational_demand
+                )
                 total_cost = total_cost - stage_cost + local_price
                 placed = True
             if not placed:
