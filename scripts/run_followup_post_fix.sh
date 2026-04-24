@@ -29,7 +29,10 @@ cd "${REPO_DIR}"
 LOG_PREFIX="results/ablation/followup"
 
 echo "==[$(date '+%F %T')]== waiting for current ablation process..." | tee -a "${LOG_PREFIX}.log"
-while pgrep -f "scripts.run_ablation" >/dev/null 2>&1; do
+# Match only the python interpreter executing run_ablation, NOT tmux command
+# lines that happen to contain the same substring (lingering tmux processes
+# from a closed campaign session would otherwise cause an infinite wait).
+while pgrep -f 'python[0-9.]* -m scripts\.run_ablation' >/dev/null 2>&1; do
     sleep 30
 done
 echo "==[$(date '+%F %T')]== current ablation process has exited." | tee -a "${LOG_PREFIX}.log"
