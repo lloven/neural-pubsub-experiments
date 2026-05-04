@@ -202,11 +202,16 @@ python scripts/generate_figures.py --results-dir results/ --output-dir figs/
 
 Figures are output to `figs/` and can be copied to the manuscript directory.
 
-## Related Publications
+## Reproducing the Paper
 
-- L. Loven, "Agentic Edge Intelligence", IEEE/ACM UCC 2025.
-- L. Loven et al., AI Service Markets Trilogy (Papers 1-3): economic mechanisms, semantic interconnect, and resource optimisation for distributed AI across the computing continuum.
+See [`REPRODUCING.md`](REPRODUCING.md) for the seven-phase campaign protocol, smoke-test instructions, and figure-generation script.
+
+## Citation
+
+If you use this software, please cite the accompanying paper (see [`CITATION.cff`](CITATION.cff)):
+
+> L. Lovén, R. Morabito, A. Kumar, S. Pirttikangas, J. Riekki, S. Tarkoma. *When Decentralisation Wins: A Federated-Market Orchestration Substrate for Agentic AI Workloads.* IEEE Open Journal of the Communications Society (under review), 2026.
 
 ## License
 
-Apache 2.0 (full LICENSE file to be added).
+[Apache 2.0](LICENSE).
