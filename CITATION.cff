@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+title: "Neural Pub/Sub: Federated semantic broker for distributed AI pipeline orchestration"
+authors:
+  - family-names: Lovén
+    given-names: Lauri
+    affiliation: "University of Oulu"
+  - family-names: Morabito
+    given-names: Roberto
+    affiliation: "EURECOM"
+  - family-names: Kumar
+    given-names: Abhishek
+    affiliation: "University of Oulu"
+  - family-names: Pirttikangas
+    given-names: Susanna
+    affiliation: "University of Oulu"
+  - family-names: Riekki
+    given-names: Jukka
+    affiliation: "University of Oulu"
+  - family-names: Tarkoma
+    given-names: Sasu
+    affiliation: "University of Oulu and University of Helsinki"
+license: Apache-2.0
+repository-code: "https://github.com/lloven/neural-pubsub-experiments"
+preferred-citation:
+  type: article
+  title: "When Decentralisation Wins: A Federated-Market Orchestration Substrate for Agentic AI Workloads"
+  authors:
+    - family-names: Lovén
+      given-names: Lauri
+    - family-names: Morabito
+      given-names: Roberto
+    - family-names: Kumar
+      given-names: Abhishek
+    - family-names: Pirttikangas
+      given-names: Susanna
+    - family-names: Riekki
+      given-names: Jukka
+    - family-names: Tarkoma
+      given-names: Sasu
+  journal: "IEEE Open Journal of the Communications Society"
+  year: 2026

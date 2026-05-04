@@ -22,6 +22,11 @@ figs/
 EXPERIMENT-PLAN.md
 REFACTOR-PLAN.md
 
+# Internal experiment protocol + ops log (contain internal SSH aliases / IPs).
+# Public-facing reproduction guide is REPRODUCING.md.
+EXPERIMENT.md
+OPERATIONS_LOG.md
+
 # Internal reference docs (not for public repo)
 docs/
 
