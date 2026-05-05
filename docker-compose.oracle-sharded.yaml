@@ -1,0 +1,71 @@
+# =============================================================================
+# Overlay: Sharded-oracle placement (designated leader + state shards).
+#
+# Merges on top of docker-compose.local.yaml (or its 4-broker market variant).
+# All brokers run with --placement-mode sharded_oracle. Broker-d1 is the
+# designated coordinator (IS_COORDINATOR=true); other brokers are state-owners
+# (IS_COORDINATOR=false). The coordinator pulls peer state via HTTP from
+# /sharded-oracle/state on each pipeline arrival, merges into a global
+# topology, runs the existing find_placement solver, and dispatches.
+#
+# This is the F1 fair-process-count comparator: same broker count as
+# market-quad, but global-optimum decision making (like oracle-global).
+#
+# Usage (local 2-broker smoke):
+#   docker compose -f docker-compose.local.yaml \
+#                  -f docker-compose.oracle-sharded.yaml up --build
+#
+# For the 4-VM cluster, scripts/multi_vm_runner.start_cluster handles the
+# IS_COORDINATOR env var via deploy/docker-compose.vm.yaml; this overlay
+# is only used for local Docker smoke testing.
+# =============================================================================
+
+services:
+
+  broker-d1:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d1
+      --broker-id broker-d1
+      --port 8080
+      --peers http://broker-d2:8080
+      --placement-mode ${PLACEMENT_MODE:-sharded_oracle}
+    environment:
+      - RESULT_FILE=${RESULT_FILE:-/app/results/metrics.csv}
+      - PLACEMENT_MODE=${PLACEMENT_MODE:-sharded_oracle}
+      # Coordinator: pulls peer state, merges, decides globally.
+      - IS_COORDINATOR=true
+    dns_opt:
+      - ndots:0
+    # Sharded-oracle coordinator must be able to dispatch directly to
+    # workers in peer shards (cross-shard placement). Connect broker-d1
+    # to every slice network so HTTP dispatches to peer worker URLs
+    # resolve via Docker's internal DNS. In the 4-VM cluster the same
+    # connectivity is provided by host networking on a shared subnet.
+    networks:
+      - slice-URLLC-d1
+      - slice-eMBB-d1
+      - slice-eMBB-d2
+
+  broker-d2:
+    command: >
+      -m ${BROKER_MODULE:-src.broker.neural_broker}
+      --domain d2
+      --broker-id broker-d2
+      --port 8080
+      --peers http://broker-d1:8080
+      --placement-mode ${PLACEMENT_MODE:-sharded_oracle}
+    environment:
+      - PLACEMENT_MODE=${PLACEMENT_MODE:-sharded_oracle}
+      # State-owner: serves /sharded-oracle/state to the coordinator.
+      - IS_COORDINATOR=false
+    dns_opt:
+      - ndots:0
+    # State-owner needs reverse path so peer-dispatched workers'
+    # results can reach broker-d1 (workers POST to coordinator's
+    # ``self_url``, which on the local Docker network is
+    # ``http://broker-d1:8080``).
+    networks:
+      - slice-eMBB-d2
+      - slice-URLLC-d1
+      - slice-eMBB-d1

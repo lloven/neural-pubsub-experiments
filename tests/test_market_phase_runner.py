@@ -73,18 +73,20 @@ class TestMarketRunConfig:
 class TestBuildRunMatrix:
     """Matrix construction: configs x pipelines x loads x seeds."""
 
-    def test_allocation_configs_produce_270(self):
+    def test_allocation_configs_produce_315(self):
+        # 7 configs (oracle-sharded added F1 round-2) x 3 pipelines x 3 loads x 5 seeds
         runs = build_run_matrix(list(MARKET_CONFIGS), DEFAULT_SEEDS)
-        assert len(runs) == 270  # 6 x 3 x 3 x 5
+        assert len(runs) == 315
 
     def test_governance_configs_produce_60(self):
         runs = build_run_matrix(list(GOV_CONFIGS), DEFAULT_SEEDS)
         assert len(runs) == 60  # 4 x 3 x 1 x 5
 
-    def test_all_configs_produce_330(self):
+    def test_all_configs_produce_375(self):
+        # 315 market + 60 governance = 375 (was 330 before oracle-sharded)
         all_cfgs = list(MARKET_CONFIGS) + list(GOV_CONFIGS)
         runs = build_run_matrix(all_cfgs, DEFAULT_SEEDS)
-        assert len(runs) == 330
+        assert len(runs) == 375
 
     def test_single_config_single_seed(self):
         runs = build_run_matrix(["market-quad"], [99])

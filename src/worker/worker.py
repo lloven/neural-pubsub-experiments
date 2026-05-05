@@ -170,6 +170,12 @@ class StageAssignment:
             derive simulated processing time: sleep = demand * processing_speed.
         input_data: Raw bytes payload from the upstream stage (may be empty).
         metadata: Arbitrary key-value pairs forwarded from the broker.
+        result_url: Optional explicit base URL where the stage result must be
+            POSTed (overrides the worker's configured broker_url). Used by
+            the sharded-oracle coordinator when dispatching stages to peer
+            workers: the coordinator includes its own URL so the result is
+            delivered back to the placement-owning broker, not to the
+            worker's registration broker.
     """
 
     pipeline_id: str
@@ -178,6 +184,7 @@ class StageAssignment:
     computational_demand: float
     input_data: bytes = field(default_factory=bytes)
     metadata: dict = field(default_factory=dict)
+    result_url: str = ""
 
 
 @dataclass
@@ -219,6 +226,7 @@ class StageAssignmentModel(BaseModel):
     computational_demand: float
     input_data: bytes = b""
     metadata: dict = {}
+    result_url: str = ""  # Sharded-oracle: dispatcher's URL for result callback
 
 
 class StageResultModel(BaseModel):
@@ -316,6 +324,7 @@ class Worker:
                 computational_demand=assignment.computational_demand,
                 input_data=assignment.input_data,
                 metadata=assignment.metadata,
+                result_url=assignment.result_url,
             )
             result = await self.execute_stage(sa)
             return StageResultModel(
@@ -503,17 +512,26 @@ class Worker:
             error=error,
         )
 
-        await self._report_result(result)
+        # Sharded-oracle: if the dispatcher specified an explicit
+        # result_url (e.g. the coordinator dispatched this stage to us
+        # via cross-shard placement), POST the result there instead of
+        # to our registration broker.
+        await self._report_result(result, result_url=assignment.result_url)
         return result
 
-    async def _report_result(self, result: StageResult) -> None:
+    async def _report_result(
+        self, result: StageResult, *, result_url: str = "",
+    ) -> None:
         """POST the stage result back to the broker.
 
-        Sends to ``{broker_url}/result``. On failure, retries once after a 1 s
-        delay. If both attempts fail, logs a WARNING with pipeline_id, stage_id,
-        and the error (L39 compliance). Does not re-raise so the worker
+        Sends to ``{result_url}/result`` if ``result_url`` is supplied
+        (sharded-oracle cross-shard dispatch), otherwise to
+        ``{broker_url}/result`` (default registration broker). On
+        failure, retries once after a 1 s delay. If both attempts fail,
+        logs a WARNING (L39 compliance). Does not re-raise so the worker
         continues serving other requests.
         """
+        target_url = (result_url or self.config.broker_url).rstrip("/")
         payload = {
             "pipeline_id": result.pipeline_id,
             "stage_id": result.stage_id,
@@ -537,7 +555,7 @@ class Worker:
         for attempt in range(2):
             try:
                 response = await self._http_client.post(
-                    f"{self.config.broker_url}/result",
+                    f"{target_url}/result",
                     json=payload,
                     timeout=5.0,
                 )

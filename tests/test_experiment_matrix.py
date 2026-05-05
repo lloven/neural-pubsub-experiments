@@ -169,13 +169,15 @@ class TestDataIntegrity:
         assert expected_run_count("stress") == 60  # 12 x 5
 
     def test_market_run_count(self):
-        assert expected_run_count("market") == 270  # 6 configs x 3 pipelines x 3 loads x 5 seeds
+        # 7 configs (incl. oracle-sharded F1 round-2 comparator) x 3 pipelines
+        # x 3 loads x 5 seeds = 315
+        assert expected_run_count("market") == 315
 
     def test_governance_run_count(self):
         assert expected_run_count("governance") == 60  # 4 configs x 3 pipelines x 1 load x 5 seeds
 
-    def test_market_has_6_configs(self):
-        assert len(get_configs("market")) == 6
+    def test_market_has_7_configs(self):
+        assert len(get_configs("market")) == 7
 
     def test_governance_has_4_configs(self):
         assert len(get_configs("governance")) == 4

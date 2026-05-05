@@ -36,6 +36,12 @@ services:
       - WAN_COST_MS=${WAN_COST_MS:-0}
       - FEDERATION_INTERVAL_S=${FEDERATION_INTERVAL_S:-10}
       - RESULT_FILE=${RESULT_FILE:-}
+      # Sharded-oracle role marker. Consumed by NeuralBroker via
+      # src.broker.sharded_oracle_broker.is_coordinator_role(). VM1's
+      # broker is set to "true" by scripts/multi_vm_runner.start_cluster
+      # when oracle_sharded_mode is enabled; all other VMs receive
+      # "false". Default is "false" (disabled).
+      - IS_COORDINATOR=${IS_COORDINATOR:-false}
 
   # 12 workers with unique ports (base + 0..11)
   worker-0:

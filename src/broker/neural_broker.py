@@ -52,6 +52,13 @@ from src.broker.placement import (
     latency_greedy_placement,
     spillover_placement,
 )
+from src.broker.sharded_oracle_broker import (
+    decide_globally,
+    is_coordinator_role,
+    snapshot_to_topology,
+    snapshot_to_worker_urls,
+    topology_to_snapshot,
+)
 from src.federation.propagation import SummaryPropagator
 from src.federation.summary import (
     ClusterSummary,
@@ -99,6 +106,11 @@ class BrokerConfig:
     broker_id: str
     host: str = "0.0.0.0"
     port: int = 8080
+    # External-facing URL of THIS broker (used by sharded-oracle peer
+    # dispatch to tell remote workers where to deliver stage results).
+    # Populated from env var BROKER_SELF_URL when present; otherwise
+    # derived as ``http://{broker_id}:{port}`` (Docker service name).
+    self_url: str = ""
     # Placement weights (Eq. 10)
     alpha: float = 1.0
     beta: float = 1.0
@@ -114,7 +126,8 @@ class BrokerConfig:
     local_stage_types: list[str] = field(default_factory=list)
     trust_levels: dict[str, float] = field(default_factory=dict)
     # Placement mode
-    placement_mode: str = "neural"  # "neural", "market", "locality", "latency", "spillover"
+    # "neural", "market", "locality", "latency", "spillover", "sharded_oracle"
+    placement_mode: str = "neural"
     # WAN cost for market-mode cross-domain pricing
     wan_cost_ms: float = 0.0
     # Transport (dual-transport factorial experiment)
@@ -285,6 +298,37 @@ class NeuralBroker:
         # Merged into local prices in _dispatch_placement_on for cross-domain routing.
         self._peer_prices: dict[str, dict[str, float]] = {}
 
+        # Sharded-oracle: peer topologies most recently fetched by the
+        # coordinator. The async publish path calls
+        # ``_fetch_sharded_oracle_peer_topologies`` which populates this
+        # cache; the synchronous ``_dispatch_placement_on`` then reads
+        # from it. State-owners leave this empty.
+        self._sharded_peer_topologies: list[NetworkTopology] = []
+        # Sharded-oracle peer worker URL cache: ``{node_id: url}`` for
+        # workers owned by peer state-owners. Populated alongside the
+        # topology snapshots so the coordinator can dispatch stages
+        # placed on peer nodes directly via HTTP, without a per-stage
+        # federation round-trip.
+        self._sharded_peer_worker_urls: dict[str, str] = {}
+        # One-shot init log so we can grep for coordinator role activation
+        # in smoke tests (per L38 / L53 verification).
+        if (
+            self.config.placement_mode == "sharded_oracle"
+            and is_coordinator_role()
+        ):
+            logger.info(
+                "sharded-oracle: coordinator role active "
+                "(IS_COORDINATOR=true, placement_mode=sharded_oracle, "
+                "broker_id=%s).",
+                self.config.broker_id,
+            )
+        elif self.config.placement_mode == "sharded_oracle":
+            logger.info(
+                "sharded-oracle: state-owner role active "
+                "(IS_COORDINATOR unset/false, broker_id=%s).",
+                self.config.broker_id,
+            )
+
     # ------------------------------------------------------------------
     # Dual-transport dispatch helper
     # ------------------------------------------------------------------
@@ -361,6 +405,99 @@ class NeuralBroker:
         )
         # Update federation summary with new capacity information
         self._update_and_propagate_summary()
+
+    def _build_local_topology(self) -> NetworkTopology:
+        """Build a NetworkTopology snapshot of THIS broker's local workers.
+
+        Used by the sharded-oracle ``GET /sharded-oracle/state`` endpoint
+        to publish a snapshot of the local shard's workers. The returned
+        topology contains only intra-shard latencies; cross-shard
+        latencies are injected by the coordinator via
+        ``_cross_latencies`` at merge time.
+
+        This is a lightweight wrapper over the live ``_topology`` cache
+        rebuilt on every register/deregister.
+        """
+        return NetworkTopology(
+            nodes=list(self._topology.nodes),
+            latency_matrix=dict(self._topology.latency_matrix),
+        )
+
+    def _cross_latencies(self) -> dict[tuple[str, str], float]:
+        """Return cross-shard pairwise latencies for the sharded oracle.
+
+        For the F1 4-VM testbed the deployment topology is::
+
+            VM1 (DU,    d1, edge)  <-> VM2 (CU/nRT-RIC, d2, edge)
+            VM3 (nRT,   d3, cloud) <-> VM4 (SMO,         d4, cloud)
+            edge <--- WAN_max=50ms ---> cloud
+
+        We hardcode WAN_max=50 ms between every cross-domain node pair.
+        The merge step in ``decide_globally`` overlays these on top of
+        the per-shard intra-domain latencies. This is the WAN_max value
+        from §4.2.4 of the manuscript.
+        """
+        nodes = list(self._topology.nodes)
+        cross: dict[tuple[str, str], float] = {}
+        # Pull peer node ids from the cached snapshots, too.
+        peer_nodes: list[ExecutionUnit] = []
+        for peer_topo in self._sharded_peer_topologies:
+            peer_nodes.extend(peer_topo.nodes)
+        for a in nodes:
+            for b in peer_nodes:
+                if a.domain_id != b.domain_id:
+                    cross[(a.node_id, b.node_id)] = 50.0
+        # Also peer-to-peer cross-shard pairs (e.g. d2 <-> d3 across the
+        # WAN) so the merged topology has full pairwise latency coverage.
+        for i, a in enumerate(peer_nodes):
+            for b in peer_nodes[i + 1:]:
+                if a.domain_id != b.domain_id:
+                    cross[(a.node_id, b.node_id)] = 50.0
+        return cross
+
+    async def _fetch_sharded_oracle_peer_topologies(self) -> None:
+        """Pull each federation peer's sharded-oracle state snapshot.
+
+        Best-effort: a peer that fails (timeout, connection refused) is
+        skipped with a warning. Surviving peers populate
+        ``self._sharded_peer_topologies`` for the subsequent
+        ``_dispatch_placement_on(... "sharded_oracle" ...)`` call.
+
+        Timeout per peer is 2.0 s; failures do not block the publish
+        path (the coordinator falls back to whatever peers responded).
+        """
+        if not self.config.peer_urls:
+            self._sharded_peer_topologies = []
+            self._sharded_peer_worker_urls = {}
+            return
+        if self._http_client is None:
+            self._sharded_peer_topologies = []
+            self._sharded_peer_worker_urls = {}
+            return
+        peers: list[NetworkTopology] = []
+        peer_urls: dict[str, str] = {}
+        for peer_url in self.config.peer_urls:
+            try:
+                resp = await self._http_client.get(
+                    f"{peer_url.rstrip('/')}/sharded-oracle/state",
+                    timeout=2.0,
+                )
+                resp.raise_for_status()
+                snap = resp.json()
+                peers.append(snapshot_to_topology(snap))
+                peer_urls.update(snapshot_to_worker_urls(snap))
+            except Exception as exc:
+                logger.warning(
+                    "sharded-oracle: peer state pull from %s failed: %r",
+                    peer_url, exc,
+                )
+        self._sharded_peer_topologies = peers
+        self._sharded_peer_worker_urls = peer_urls
+        logger.info(
+            "sharded-oracle: coordinator pulled %d/%d peer state snapshots "
+            "(peer worker urls cached: %d).",
+            len(peers), len(self.config.peer_urls), len(peer_urls),
+        )
 
     def _build_capacity_summary(self) -> SubscriptionSummary:
         """Build a capacity-based SubscriptionSummary from registered workers.
@@ -585,6 +722,45 @@ class NeuralBroker:
                 self.config.domain_id,
                 load_aware=self.config.market_load_aware,
             )
+        elif mode == "sharded_oracle":
+            # Sharded oracle: coordinator merges its local topology with
+            # peer state-owner snapshots (fetched by the async publish path
+            # into ``self._sharded_peer_topologies``) and runs the global
+            # solver over the merged topology. State-owners should not
+            # receive pipeline submissions in this design (workload targets
+            # VM1); fall back to local-only placement and warn.
+            if is_coordinator_role():
+                logger.info(
+                    "sharded-oracle: coordinator decide over %d local "
+                    "nodes + %d peer shard(s).",
+                    len(topology.nodes),
+                    len(self._sharded_peer_topologies),
+                )
+                return decide_globally(
+                    dag=dag,
+                    local_topology=topology,
+                    peer_topologies=self._sharded_peer_topologies,
+                    cross_latencies=self._cross_latencies(),
+                    governance=governance,
+                    alpha=self.config.alpha,
+                    beta=self.config.beta,
+                    gamma=self.config.gamma,
+                )
+            else:
+                logger.warning(
+                    "sharded-oracle state-owner '%s' received a pipeline "
+                    "submission directly; expected workload to target the "
+                    "coordinator (VM1). Falling back to local placement.",
+                    self.config.broker_id,
+                )
+                return find_placement(
+                    dag=dag,
+                    topology=topology,
+                    governance=governance,
+                    alpha=self.config.alpha,
+                    beta=self.config.beta,
+                    gamma=self.config.gamma,
+                )
         elif mode == "locality":
             return locality_placement(
                 dag, topology, governance, self.config.domain_id,
@@ -962,11 +1138,32 @@ class NeuralBroker:
         """
         node_id = pipeline_state.placement[stage_id]
         worker = self._workers.get(node_id)
+        # Sharded-oracle coordinator: stages may be placed on peer-owned
+        # workers. Look up the dispatch URL in the cached peer-worker map
+        # populated by ``_fetch_sharded_oracle_peer_topologies``.
+        peer_dispatch = False
+        if worker is None:
+            peer_url = self._sharded_peer_worker_urls.get(node_id)
+            if peer_url is not None:
+                # Synthesise a transient WorkerInfo for dispatch only; do
+                # NOT register the peer worker in ``self._workers`` (the
+                # state-owner broker keeps authoritative ownership).
+                worker = WorkerInfo(
+                    node_id=node_id,
+                    domain_id=node_id.split("-")[0]
+                    if "-" in node_id else "",
+                    slice_id="",
+                    capacity=0.0,
+                    url=peer_url,
+                    current_load=0.0,
+                )
+                peer_dispatch = True
         if worker is None:
             logger.error(
-                "Cannot dispatch stage '%s': worker '%s' not found.",
-                stage_id,
-                node_id,
+                "Cannot dispatch stage '%s': worker '%s' not found "
+                "(local registry size=%d, peer URL cache size=%d).",
+                stage_id, node_id,
+                len(self._workers), len(self._sharded_peer_worker_urls),
             )
             async with self._pipelines_lock:
                 pipeline_state.failed = True
@@ -999,6 +1196,16 @@ class NeuralBroker:
                 "pipeline_type": pipeline_state.pipeline_type,
             },
         }
+        # Sharded-oracle peer dispatch: tell the worker to deliver its
+        # result to THIS coordinator (which owns the pipeline state),
+        # not to the worker's registration broker.
+        if peer_dispatch:
+            self_url = (
+                self.config.self_url
+                or os.environ.get("BROKER_SELF_URL")
+                or f"http://{self.config.broker_id}:{self.config.port}"
+            )
+            payload["result_url"] = self_url.rstrip("/")
 
         # Reserve load at dispatch time (not placement time).
         # Released in stage_result handler via _update_worker_load(-demand).
@@ -1287,6 +1494,15 @@ class NeuralBroker:
                 workers_snapshot = dict(self._workers)
                 has_nodes = bool(topo_snapshot.nodes)
 
+            # Sharded-oracle: coordinator must pull peer state BEFORE
+            # placement so the global solver sees the merged shard
+            # topology. State-owners skip this (they don't decide).
+            if (
+                self.config.placement_mode == "sharded_oracle"
+                and is_coordinator_role()
+            ):
+                await self._fetch_sharded_oracle_peer_topologies()
+
             if has_nodes:
                 try:
                     placement = self._dispatch_placement_on(
@@ -1365,8 +1581,29 @@ class NeuralBroker:
             # (consistent with the state used for placement).
             from src.broker.placement import check_feasibility
 
+            # Sharded-oracle coordinator: the placement may target peer
+            # nodes not in the local ``topo_snapshot``. Rebuild a merged
+            # topology from the cached peer snapshots so the post-hoc
+            # feasibility check covers the global node set. Governance
+            # was already enforced by ``decide_globally`` over the
+            # merged-governance policy; the re-check here is paranoia
+            # and may safely be skipped if peer state was unavailable.
+            feasibility_topology = topo_snapshot
+            if (
+                self.config.placement_mode == "sharded_oracle"
+                and is_coordinator_role()
+                and self._sharded_peer_topologies
+            ):
+                from src.broker.sharded_oracle_broker import (
+                    merge_topologies,
+                )
+                feasibility_topology = merge_topologies(
+                    [topo_snapshot, *self._sharded_peer_topologies],
+                    self._cross_latencies(),
+                )
+
             is_feasible, violations = check_feasibility(
-                placement, dag, topo_snapshot, gov_snapshot
+                placement, dag, feasibility_topology, gov_snapshot
             )
             if not is_feasible:
                 for v in violations:
@@ -1756,6 +1993,26 @@ class NeuralBroker:
             )
 
         # ------------------------------------------------------------------
+        # GET /sharded-oracle/state
+        # ------------------------------------------------------------------
+
+        @app.get("/sharded-oracle/state")
+        async def sharded_oracle_state() -> dict:
+            """Publish a snapshot of this broker's local shard state.
+
+            Used by the sharded-oracle coordinator to pull peer state
+            owners' worker registries. Always-on (does not check
+            placement_mode) so the endpoint is harmless when not in
+            sharded_oracle mode and the test surface is uniform.
+            """
+            async with self._workers_lock:
+                local_topology = self._build_local_topology()
+                worker_urls = {
+                    nid: w.url for nid, w in self._workers.items()
+                }
+            return topology_to_snapshot(local_topology, worker_urls)
+
+        # ------------------------------------------------------------------
         # GET /health
         # ------------------------------------------------------------------
 
@@ -1868,9 +2125,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--placement-mode",
         default=os.environ.get("PLACEMENT_MODE", "neural"),
-        choices=["neural", "market", "locality", "latency", "spillover"],
+        choices=[
+            "neural", "market", "locality", "latency", "spillover",
+            "sharded_oracle",
+        ],
         help="Placement strategy: neural (S3), market (price-based), "
-        "locality (local-only), latency (greedy), spillover (local+overflow).",
+        "locality (local-only), latency (greedy), spillover (local+overflow), "
+        "sharded_oracle (4-broker centralised, designated coordinator).",
     )
     parser.add_argument(
         "--wan-cost",

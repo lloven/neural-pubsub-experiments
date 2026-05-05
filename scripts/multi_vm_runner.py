@@ -356,6 +356,7 @@ def start_cluster(
     per_vm_env: dict[str, dict[str, str]] | None = None,
     compose_file: str = "deploy/docker-compose.vm.yaml",
     oracle_mode: bool = False,
+    oracle_sharded_mode: bool = False,
     dry_run: bool = False,
 ) -> None:
     """Start compose stacks on all VMs.
@@ -365,11 +366,22 @@ def start_cluster(
     the centralised oracle (upper-bound baseline) described in
     DistributionArch.tex Sec. 4.4.
 
+    When ``oracle_sharded_mode`` is True, all 4 VMs run a broker (like
+    the default 4-broker market deployment), but VM1's broker receives
+    ``IS_COORDINATOR=true`` so it acts as the coordinator that pulls
+    peer state and runs the global solver. VMs 2-4 run state-owners.
+    The two modes are mutually exclusive.
+
     ``compose_file`` and ``per_vm_env`` allow ablation experiments to
     use alternative compose files (e.g., ``docker-compose.vm-ablation.yaml``)
     and per-VM env overrides (e.g., ``WORKER_PROCESSING_SPEED`` for
     heterogeneous capacity scenarios).
     """
+    if oracle_mode and oracle_sharded_mode:
+        raise ValueError(
+            "oracle_mode and oracle_sharded_mode are mutually exclusive."
+        )
+
     for vm in VMS:
         gov_enabled = _governance_for_vm(vm, governance_config)
 
@@ -384,6 +396,15 @@ def start_cluster(
             env_parts.append(f"WORKER_BROKER_URL=http://{VMS[0].ip}:8080")
         else:
             env_parts.append("WORKER_BROKER_URL=http://localhost:8080")
+
+        # Sharded oracle: VM1 is the coordinator; VMs 2-4 are state-owners.
+        # IS_COORDINATOR is consumed by NeuralBroker via
+        # src.broker.sharded_oracle_broker.is_coordinator_role() (per L53).
+        if oracle_sharded_mode:
+            if vm == VMS[0]:
+                env_parts.append("IS_COORDINATOR=true")
+            else:
+                env_parts.append("IS_COORDINATOR=false")
 
         if broker_module:
             env_parts.append(f"BROKER_MODULE={broker_module}")
@@ -578,14 +599,26 @@ def run_single(
     failure_fn: object | None = None,
     wan_emulation: bool = True,
     oracle_mode: bool = False,
+    oracle_sharded_mode: bool = False,
     run_id: str | None = None,
     dry_run: bool = False,
 ) -> None:
     """Execute a single experiment run on the 4-VM cluster."""
     run_id = run_id or f"{config}_seed-{seed}"
-    logger.info("=== Run: %s (placement=%s, governance=%s, broker=%s, oracle=%s) ===",
-                run_id, placement_mode, governance_config,
-                broker_module or "neural_broker", oracle_mode)
+    logger.info(
+        "=== Run: %s (placement=%s, governance=%s, broker=%s, "
+        "oracle=%s, oracle_sharded=%s) ===",
+        run_id, placement_mode, governance_config,
+        broker_module or "neural_broker", oracle_mode, oracle_sharded_mode,
+    )
+
+    # Sharded-oracle uses the same 4-broker per-VM compose file as
+    # market-quad (deploy/docker-compose.vm.yaml). The IS_COORDINATOR
+    # env var is propagated through the shell into the compose
+    # substitution and consumed by NeuralBroker via
+    # is_coordinator_role() (per L53). No separate compose file needed
+    # for the multi-VM path; docker-compose.oracle-sharded.yaml at the
+    # repo root is the LOCAL-Docker smoke variant.
 
     # 1. Start cluster
     start_cluster(
@@ -596,6 +629,7 @@ def run_single(
         per_vm_env=per_vm_env,
         compose_file=compose_file,
         oracle_mode=oracle_mode,
+        oracle_sharded_mode=oracle_sharded_mode,
         dry_run=dry_run,
     )
 
@@ -657,6 +691,8 @@ CONFIG_MAP = {
     "neural":          {"placement": "neural", "governance": "none"},
     # --- Market/allocation strategies ---
     "oracle-global":   {"placement": "oracle",        "governance": "all"},
+    "oracle-sharded":  {"placement": "sharded_oracle", "governance": "all",
+                        "oracle_sharded_mode": True},
     "market-quad":     {"placement": "market",        "governance": "all"},
     "locality-only":   {"placement": "locality",      "governance": "all"},
     "latency-greedy":  {"placement": "latency_greedy", "governance": "all"},
@@ -706,6 +742,7 @@ def main() -> None:
         governance_config=cfg["governance"],
         broker_module=cfg.get("broker_module"),
         placement=cfg.get("static_placement"),
+        oracle_sharded_mode=cfg.get("oracle_sharded_mode", False),
         warmup_s=args.warmup,
         measurement_s=args.measurement,
         wan_emulation=False,  # requires sudo; enable when available

@@ -78,6 +78,15 @@ MARKET_CONFIGS: dict[str, dict] = {
         "governance_config": "all",
         "description": "Market: 4 federated brokers, price-signal coordination",
     },
+    "oracle-sharded": {
+        "placement_mode": "sharded_oracle",
+        "governance_config": "all",
+        "oracle_sharded_mode": True,
+        "description": (
+            "Sharded oracle: 4 brokers, designated coordinator (VM1), "
+            "global decision over merged shard state"
+        ),
+    },
     "locality-only": {
         "placement_mode": "locality",
         "governance_config": "all",
@@ -233,6 +242,7 @@ def _run_distributed(run: MarketRunConfig, dry_run: bool) -> dict:
         measurement_s=run.measurement_s,
         wan_emulation=True,
         oracle_mode=cfg.get("oracle_mode", False),
+        oracle_sharded_mode=cfg.get("oracle_sharded_mode", False),
         dry_run=dry_run,
     )
     # Propagate failure from run_single (e.g. federation timeout)

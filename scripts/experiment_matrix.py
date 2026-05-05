@@ -87,6 +87,7 @@ EXPERIMENTS: dict[str, dict] = {
         "configs": [
             # --- Allocation strategies (run at all 3 pipeline types x 3 loads) ---
             "oracle-global",       # centralised upper bound: single broker on VM1, all 48 workers
+            "oracle-sharded",      # fair process-count comparator: 4 brokers, designated coordinator (F1 round-2)
             "rr-global",           # conventional centralised baseline: single broker, round-robin
             "market-quad",         # 4 federated brokers, price-signal coordination
             "locality-only",       # each domain handles own traffic, no cross-domain
@@ -151,7 +152,9 @@ EXPERIMENTS: dict[str, dict] = {
         ],
         "seeds": DEFAULT_SEEDS,
         "transports": ["http"],
-        "strategies": ["oracle-global", "rr-global", "market-quad"],
+        "strategies": [
+            "oracle-global", "oracle-sharded", "rr-global", "market-quad",
+        ],
         "pipelines": ["cqi-chain", "anomaly-sp", "ran-entangled"],
         # Ablation MUST use the main campaign's run length (not a shorter
         # window) so that CR / latency / p95 are directly comparable across
