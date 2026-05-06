@@ -69,7 +69,7 @@ _FAILURE_DELAY_S = _MEASUREMENT_S // 2
 # Strategies (subset of run_market.py MARKET_CONFIGS)
 # ---------------------------------------------------------------------------
 
-STRATEGIES = ["oracle-global", "rr-global", "market-quad"]
+STRATEGIES = ["oracle-global", "rr-global", "market-quad", "oracle-sharded"]
 
 STRATEGY_CONFIG: dict[str, dict] = {
     "oracle-global": {
@@ -93,6 +93,15 @@ STRATEGY_CONFIG: dict[str, dict] = {
         # workers (Walrasian price discovery), not whether federation
         # forwarding routes correctly — that's tested by H-FEDERATION.
         "oracle_mode": True,
+    },
+    "oracle-sharded": {
+        # F1 fair-process-count comparator: 4 brokers like market-quad,
+        # designated coordinator (VM1, IS_COORDINATOR=true) decides
+        # globally over the merged shard topology. State-owners (VM2-4)
+        # expose /sharded-oracle/state. Closes round-1 C7 AUTHOR REQUIRED.
+        "placement_mode": "sharded_oracle",
+        "governance_config": "all",
+        "oracle_sharded_mode": True,
     },
 }
 
@@ -329,6 +338,7 @@ def _run_distributed(run: AblationRunConfig, dry_run: bool) -> dict:
         failure_fn=failure_fn,
         wan_emulation=True,
         oracle_mode=strat_cfg.get("oracle_mode", False),
+        oracle_sharded_mode=strat_cfg.get("oracle_sharded_mode", False),
         dry_run=dry_run,
     )
     # Propagate failure from run_single (e.g. federation timeout)
