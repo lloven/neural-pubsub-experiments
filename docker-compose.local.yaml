@@ -2,7 +2,7 @@
 # Local emulation of the multi-domain, multi-slice Neural Pub/Sub testbed.
 #
 # Topology:
-#   2 domains (d1 = Tokyo, d2 = Oulu), each with its own broker and workers.
+#   2 administrative domains (d1, d2), each with its own broker and workers.
 #   Domain 1: 2 URLLC workers + 1 eMBB worker  (handles CQI + anomaly pipelines)
 #   Domain 2: 2 eMBB workers only               (CQI pipelines forwarded to D1)
 #

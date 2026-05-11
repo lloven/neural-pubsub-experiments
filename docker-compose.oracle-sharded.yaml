@@ -8,8 +8,8 @@
 # /sharded-oracle/state on each pipeline arrival, merges into a global
 # topology, runs the existing find_placement solver, and dispatches.
 #
-# This is the F1 fair-process-count comparator: same broker count as
-# market-quad, but global-optimum decision making (like oracle-global).
+# This is the fair-process-count centralised comparator: same broker count
+# as market-quad, but global-optimum decision making (like oracle-global).
 #
 # Usage (local 2-broker smoke):
 #   docker compose -f docker-compose.local.yaml \

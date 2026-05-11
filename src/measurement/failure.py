@@ -326,7 +326,7 @@ class FailureInjector:
 
         Removes the container from the specified Docker network, breaking
         connectivity to all other containers on that network. Used to
-        simulate inter-site link failures (Tokyo-Oulu WAN link down).
+        simulate inter-site link failures (cross-domain WAN link down).
 
         Args:
             container_name: Container to disconnect.

@@ -1,14 +1,14 @@
 # Neural Pub/Sub
 
-Federated semantic pub/sub broker for distributed AI pipeline orchestration across the 6G computing continuum.
+Federated, market-coordinated pub/sub broker for autonomic orchestration of AI inference pipelines across the edge–cloud continuum.
 
 ## Overview
 
-Neural Pub/Sub extends the Neural Router (single-broker semantic routing) with broker federation, slice-aware placement, and governance-constrained cross-domain routing. The system distributes AI inference pipelines (represented as service-dependency DAGs) across multiple administrative domains connected by a 6G network, where each domain operates its own Neural Router broker instance.
+Neural Pub/Sub is an autonomic substrate whose self-organising behaviour emerges from market-based price signals rather than centralised control. Each administrative domain runs a Neural broker instance that closes a MAPE-K control loop over per-broker health and load monitoring, marginal-cost clearing-price analysis, placement planning over a polymatroidal feasibility region, federated cross-domain dispatch, and shared peer subscription summaries with bounded-staleness price signals. Under gross-substitutes valuations on tree and series-parallel service-dependency DAGs, decentralised price-based allocation matches the welfare of a centralised oracle (Walrasian convergence; see §3 of the paper).
 
-The architecture implements the distribution model from Section 4 of the paper: brokers exchange compact subscription summaries (centroid embeddings + capacity), enabling cross-domain semantic routing without exposing local topology. A weighted placement algorithm (Eq. 10) assigns pipeline stages to execution units, balancing latency, load, and governance constraints. The system handles three pipeline patterns from 6G RAN use cases: CQI prediction (URLLC), anomaly detection (eMBB), and sensor fusion (multi-slice).
+The architecture implements the distribution model from §4 of the paper: brokers exchange compact subscription summaries (centroid embeddings + capacity), enabling cross-domain semantic routing without exposing local topology. A weighted placement algorithm (Eq. 10) assigns pipeline stages to execution units, balancing latency, load, and tenant- and operator-specified data-sovereignty constraints. Three pipeline patterns from 6G RAN use cases are exercised: CQI prediction (URLLC), anomaly detection (eMBB), and sensor fusion (multi-slice).
 
-The experiment validates these mechanisms on a real 6G testbed (Nakao Lab Local6G, University of Tokyo) and optionally across a Tokyo-Oulu federation link to 5GTNF. All code is developed and smoke-tested locally via Docker Compose before testbed deployment.
+The reported campaign runs the substrate on a 4-VM, 4-domain, 48-worker federated edge–cloud testbed (single data centre, 50 ms emulated WAN), with 1005 runs spanning three pipeline structures (tree, series-parallel, entangled DAG) and three arrival rates. All code is developed and smoke-tested locally via Docker Compose before testbed deployment; the two-domain layout in the diagram below is the architectural reference, not the campaign topology.
 
 ## Architecture
 
@@ -18,7 +18,6 @@ The experiment validates these mechanisms on a real 6G testbed (Nakao Lab Local6
                     │                             │
               ┌─────┴─────┐                 ┌─────┴─────┐
               │ broker-d1 │◄── summaries ──►│ broker-d2 │
-              │  (Tokyo)  │   propagation   │  (Oulu)   │
               └─┬───────┬─┘                 └─────┬─────┘
                 │       │                         │
         ┌───────┘       └──────┐                  │
@@ -210,7 +209,7 @@ See [`REPRODUCING.md`](REPRODUCING.md) for the seven-phase campaign protocol, sm
 
 If you use this software, please cite the accompanying paper (see [`CITATION.cff`](CITATION.cff)):
 
-> L. Lovén, R. Morabito, A. Kumar, S. Pirttikangas, J. Riekki, S. Tarkoma. *When Decentralisation Wins: A Federated-Market Orchestration Substrate for Agentic AI Workloads.* IEEE Open Journal of the Communications Society (under review), 2026.
+> L. Lovén, R. Morabito, A. Kumar, S. Pirttikangas, J. Riekki, S. Tarkoma. *Autonomic Federated-Market Orchestration for the Edge–Cloud Continuum.* ACM Transactions on Autonomous and Adaptive Systems, Special Issue on Autonomic Approaches and Applications for the Edge–HPC/Cloud Computing Continuum (under review), 2026.
 
 ## License
 

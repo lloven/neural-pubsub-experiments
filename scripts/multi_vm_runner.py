@@ -44,13 +44,16 @@ class VMConfig:
     site: str      # "edge" or "cloud"
     domain: str    # d1, d2, d3, d4
 
-# Default placeholder VMS — override with real IPs in multi_vm_config_local.py
-# (git-ignored). See deploy/vm*.env.example for env file templates.
+# Placeholder VMS — override with real IPs and SSH aliases in a git-ignored
+# `scripts/multi_vm_config_local.py` module that exports a `VMS` list with the
+# same shape. See `deploy/vm*.env.example` for the matching env file templates.
+# The placeholder values below are intentionally not valid hosts: running the
+# orchestrator without a local override fails fast at SSH resolution.
 VMS = [
-    VMConfig("vm1", "10.0.0.1", "testbed-vm1", "vm1-edge-du.env",    "edge",  "d1"),
-    VMConfig("vm2", "10.0.0.2", "testbed-vm2", "vm2-edge-ric.env",   "edge",  "d2"),
-    VMConfig("vm3", "10.0.0.3", "testbed-vm3", "vm3-cloud-nrt.env",  "cloud", "d3"),
-    VMConfig("vm4", "10.0.0.4", "testbed-vm4", "vm4-cloud-smo.env",  "cloud", "d4"),
+    VMConfig("vm1", "<vm-1-ip>", "<vm-1-ssh-alias>", "vm1-edge-du.env",   "edge",  "d1"),
+    VMConfig("vm2", "<vm-2-ip>", "<vm-2-ssh-alias>", "vm2-edge-ric.env",  "edge",  "d2"),
+    VMConfig("vm3", "<vm-3-ip>", "<vm-3-ssh-alias>", "vm3-cloud-nrt.env", "cloud", "d3"),
+    VMConfig("vm4", "<vm-4-ip>", "<vm-4-ssh-alias>", "vm4-cloud-smo.env", "cloud", "d4"),
 ]
 
 try:

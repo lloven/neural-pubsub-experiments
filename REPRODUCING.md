@@ -2,9 +2,9 @@
 
 This document describes how to reproduce the seven-phase experimental campaign reported in:
 
-> L. Lovén, R. Morabito, A. Kumar, S. Pirttikangas, J. Riekki, S. Tarkoma. *When Decentralisation Wins: A Federated-Market Orchestration Substrate for Agentic AI Workloads.* IEEE Open Journal of the Communications Society (under review), 2026.
+> L. Lovén, R. Morabito, A. Kumar, S. Pirttikangas, J. Riekki, S. Tarkoma. *Autonomic Federated-Market Orchestration for the Edge–Cloud Continuum.* ACM Transactions on Autonomous and Adaptive Systems, Special Issue on Autonomic Approaches and Applications for the Edge–HPC/Cloud Computing Continuum (under review), 2026.
 
-The campaign comprises 1005 runs across seven phases on a 4-VM, 4-domain, 48-worker O-RAN testbed. Each phase produces a CSV result set under `results/<phase>/` and a `.progress.json` checkpoint.
+The campaign comprises 1005 runs across seven phases on a 4-VM, 4-domain, 48-worker federated edge–cloud testbed (5GTNF, single data centre, 50 ms emulated WAN). Each phase produces a CSV result set under `results/<phase>/` and a `.progress.json` checkpoint.
 
 ## Phases
 
@@ -62,11 +62,11 @@ Once a phase has completed, the §5 figures of the manuscript are produced by:
 python scripts/generate_manuscript_figures.py
 ```
 
-The script reads `results/remote-fetch-<date>/` and writes PDFs into the manuscript figure directory. CSV-to-figure mapping is documented inside the script.
+The script reads CSVs from `results/<phase>/` and writes PDFs into the configured output directory. CSV-to-figure mapping is documented inside the script.
 
 ## Hardware envelope (paper testbed)
 
-The paper's 5G Test Network Finland deployment uses four physical VMs (12 vCPU, 32 GB RAM each) connected by an emulated WAN link (`tc qdisc` at 50 ms one-way delay, 10 % jitter). Smaller deployments (single VM, 4 brokers co-located) reproduce the qualitative findings F1–F4 but with proportionally smaller absolute latencies.
+The paper's 5G Test Network Finland (5GTNF) deployment uses four physical VMs (12 vCPU, 32 GB RAM each) connected by an emulated WAN link (`tc qdisc netem`, 50 ms delay). Smaller deployments (single VM, 4 brokers co-located) reproduce the qualitative findings but with proportionally smaller absolute latencies.
 
 ## Contact
 

@@ -1,4 +1,4 @@
-# Domain 2 broker configuration (emulates Oulu / 5GTNF).
+# Domain 2 broker configuration.
 # Same structure as domain_d1.yaml; see that file for detailed field docs.
 
 # Unique domain identifier.

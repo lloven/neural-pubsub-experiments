@@ -95,10 +95,10 @@ STRATEGY_CONFIG: dict[str, dict] = {
         "oracle_mode": True,
     },
     "oracle-sharded": {
-        # F1 fair-process-count comparator: 4 brokers like market-quad,
+        # Fair-process-count comparator: 4 brokers like market-quad,
         # designated coordinator (VM1, IS_COORDINATOR=true) decides
         # globally over the merged shard topology. State-owners (VM2-4)
-        # expose /sharded-oracle/state. Closes round-1 C7 AUTHOR REQUIRED.
+        # expose /sharded-oracle/state.
         "placement_mode": "sharded_oracle",
         "governance_config": "all",
         "oracle_sharded_mode": True,

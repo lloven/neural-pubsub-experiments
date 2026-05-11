@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Federation: Cross-site federation.
 
-Runs 5 configurations across two federated domains (Tokyo + Oulu):
+Runs 5 configurations across two federated domains (d1, d2):
   static     -- Kafka at each site, static routing (cross-site baseline)
   neural     -- Neural Pub/Sub, federated (2 brokers)
   gov        -- neural + governance (raw radio data stays in domain 1)

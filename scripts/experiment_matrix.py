@@ -189,7 +189,7 @@ EXPERIMENTS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Manuscript hypothesis -> experiment mapping (IEEE TNSE)
+# Manuscript hypothesis -> experiment mapping
 # ---------------------------------------------------------------------------
 
 HYPOTHESIS_MAP: dict[str, dict] = {

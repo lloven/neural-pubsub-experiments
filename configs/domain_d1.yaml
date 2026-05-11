@@ -1,4 +1,4 @@
-# Domain 1 broker configuration (emulates Tokyo / Nakao Lab Local6G).
+# Domain 1 broker configuration.
 # This file parameterises the Neural Broker for a single administrative domain.
 
 # Unique domain identifier. Used in federation routing, governance checks,

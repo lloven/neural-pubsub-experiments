@@ -2,8 +2,8 @@
 # Setup WAN emulation between edge (VM2) and cloud (VM3).
 # Run on VM2 and VM3 before starting experiments.
 #
-# Usage: ./setup-wan.sh <remote_ip> [delay_ms] [jitter_ms]
-#   e.g.: ./setup-wan.sh 10.0.0.3 50 5
+# Usage: ./setup-wan.sh <remote_ip> [delay_ms] [jitter_ms] [iface]
+#   e.g.: ./setup-wan.sh <peer-vm-ip> 50 5 eth0
 
 set -euo pipefail
 
