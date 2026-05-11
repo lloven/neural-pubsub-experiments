@@ -123,7 +123,7 @@ class TestAblationComposeFile:
 
 
 class TestRunAblationPhase:
-    """run_ablation.py defines 5 scenarios x 3 strategies x 3 pipelines."""
+    """run_ablation.py defines 10 scenarios x 4 strategies x 3 pipelines."""
 
     def test_run_ablation_imports(self):
         from scripts import run_ablation
@@ -143,19 +143,26 @@ class TestRunAblationPhase:
             "heterogeneous",
         }
 
-    def test_three_strategies_per_scenario(self):
+    def test_four_strategies_per_scenario(self):
         from scripts.run_ablation import STRATEGIES
-        assert set(STRATEGIES) == {"oracle-global", "rr-global", "market-quad"}
+        assert set(STRATEGIES) == {
+            "oracle-global", "rr-global", "market-quad", "oracle-sharded",
+        }
 
-    def test_run_matrix_450_runs(self):
-        """10 scenarios x 3 strategies x 3 pipelines x 5 seeds = 450."""
+    def test_run_matrix_600_runs(self):
+        """10 scenarios x 4 strategies x 3 pipelines x 5 seeds = 600.
+
+        Full cartesian product. Campaign invocations may filter the
+        strategy list per scenario (e.g., run oracle-sharded only on
+        saturation cells via the `--strategies` CLI flag).
+        """
         from scripts.run_ablation import build_run_matrix, STRATEGIES, SCENARIOS
         runs = build_run_matrix(
             scenarios=list(SCENARIOS),
             strategies=list(STRATEGIES),
             seeds=[42, 123, 456, 789, 0],
         )
-        assert len(runs) == 450
+        assert len(runs) == 600
 
     def test_failure_scenarios_have_failure_target_or_targets(self):
         from scripts.run_ablation import SCENARIOS
