@@ -20,8 +20,14 @@ authors:
   - family-names: Tarkoma
     given-names: Sasu
     affiliation: "University of Oulu and University of Helsinki"
+version: 1.0.0
+date-released: 2026-05-26
 license: Apache-2.0
 repository-code: "https://github.com/lloven/neural-pubsub-experiments"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20392551"
+    description: "Zenodo archive of this release (v1.0.0)."
 preferred-citation:
   type: article
   title: "Autonomic Federated-Market Orchestration for the Edge–Cloud Continuum"
@@ -38,5 +44,9 @@ preferred-citation:
       given-names: Jukka
     - family-names: Tarkoma
       given-names: Sasu
-  journal: "ACM Transactions on Autonomous and Adaptive Systems"
   year: 2026
+  identifiers:
+    - type: url
+      value: "https://arxiv.org/abs/2605.27106"
+      description: "arXiv preprint (cs.DC, posted 2026-05-26 alongside the Neural Router companion arXiv:2605.25701)."
+  notes: "Preprint. Prepared for the ACM TAAS Special Issue on Autonomic Approaches and Applications for the Edge-HPC/Cloud Computing Continuum."
