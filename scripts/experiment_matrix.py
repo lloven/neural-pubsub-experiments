@@ -100,7 +100,7 @@ EXPERIMENTS: dict[str, dict] = {
         "loads": ["low", "medium", "high"],  # 2, 5, 10 pps
         "warmup_s": MAIN_CAMPAIGN_WARMUP_S,
         "measurement_s": MAIN_CAMPAIGN_MEASUREMENT_S,
-        # 6 strategies x 3 pipelines x 3 loads x 5 seeds = 270 runs
+        # 7 strategies x 3 pipelines x 3 loads x 5 seeds = 315 runs
         "notes": (
             "4-domain O-RAN topology: DU (VM1) + CU/near-RT-RIC (VM2) = edge site; "
             "non-RT-RIC (VM3) + SMO (VM4) = cloud site. 1 WAN link (50ms) between sites. "
